@@ -28,7 +28,7 @@ def validate_provider(
     """Validate that all requirements are met for the specified provider.
 
     Args:
-        provider: Provider name ("bedrock", "ollama", or "litellm")
+        provider: Provider name ("bedrock", "ollama", "litellm", or "gemini")
         env_reader: Environment variable reader
         ollama_host: Ollama server host (for Ollama validation)
         region: AWS region (for Bedrock validation)
@@ -46,6 +46,8 @@ def validate_provider(
         validate_aws_requirements(env_reader, region)
     elif provider == "litellm":
         validate_litellm_requirements(env_reader)
+    elif provider == "gemini":
+        validate_gemini_requirements(env_reader)
     else:
         raise ValueError(f"Unsupported provider type: {provider}")
 
@@ -278,3 +280,25 @@ def validate_litellm_requirements(env_reader: EnvironmentReader, model_id: str =
             "Model '%s' has no explicit prefix. LiteLLM will auto-detect provider based on credentials.",
             model_id,
         )
+
+
+def validate_gemini_requirements(env_reader: EnvironmentReader) -> None:
+    """Validate Google Gemini requirements.
+
+    This validates requirements for the native Gemini SDK provider,
+    which bypasses LiteLLM to avoid turn ordering issues.
+
+    Args:
+        env_reader: Environment variable reader
+
+    Raises:
+        EnvironmentError: If GEMINI_API_KEY is not set
+    """
+    api_key = env_reader.get("GEMINI_API_KEY")
+    if not api_key:
+        raise EnvironmentError(
+            "GEMINI_API_KEY environment variable must be set for native Gemini provider. "
+            "Get your API key from https://ai.google.dev/"
+        )
+
+    logger.info("Gemini API key configured for native SDK provider")
