@@ -67,7 +67,7 @@ class ModelProvider(Enum):
     AWS_BEDROCK = "aws_bedrock"
     OLLAMA = "ollama"
     LITELLM = "litellm"  # Universal provider gateway supporting 100+ model providers
-    GEMINI = "gemini"  # Native Google Gemini SDK
+    GEMINI = "gemini"  
 
 
 @dataclass
