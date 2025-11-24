@@ -9,11 +9,11 @@ import signal
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from strands import Agent
 from strands.types.tools import AgentTool
-from strands.tools.mcp.mcp_client import MCPClient
+from strands.tools.executors import ConcurrentToolExecutor
 from strands_tools.editor import editor
 from strands_tools.http_request import http_request
 from strands_tools.load_tool import load_tool
@@ -39,6 +39,7 @@ from modules.config.models.factory import (
     create_bedrock_model,
     create_ollama_model,
     create_litellm_model,
+    create_gemini_model,
     _handle_model_creation_error,
     _resolve_prompt_token_limit,
 )
@@ -55,6 +56,22 @@ from modules.handlers.conversation_budget import (
 from modules.handlers.tool_router import ToolRouterHook
 from modules.config.models.capabilities import get_capabilities
 from modules.handlers.utils import print_status, sanitize_target_name, get_output_path
+from strands.tools.mcp.mcp_client import MCPClient
+
+from modules.tools.mcp import (
+    ResilientMCPToolAdapter,
+    list_mcp_tools_wrapper,
+    mcp_tools_input_schema_to_function_call,
+    resolve_env_vars_in_dict,
+    resolve_env_vars_in_list,
+    start_managed_mcp_client,
+    with_result_file,
+)
+from modules.tools.memory import (
+    get_memory_client,
+    initialize_memory_system,
+    mem0_memory,
+)
 from modules.tools.browser import (
     initialize_browser,
     browser_goto_url,
@@ -64,18 +81,6 @@ from modules.tools.browser import (
     browser_perform_action,
     browser_evaluate_js,
     browser_get_cookies,
-)
-from modules.tools.mcp import (
-    list_mcp_tools_wrapper,
-    mcp_tools_input_schema_to_function_call,
-    with_result_file,
-    resolve_env_vars_in_dict,
-    resolve_env_vars_in_list,
-)
-from modules.tools.memory import (
-    get_memory_client,
-    initialize_memory_system,
-    mem0_memory,
 )
 from modules.tools.prompt_optimizer import prompt_optimizer
 
@@ -124,7 +129,8 @@ def _discover_mcp_tools(config: AgentConfig, server_config: ServerConfig) -> Lis
                         raise ValueError(f"Unsupported MCP transport {mcp_conn.transport}")
                 client = MCPClient(transport, prefix=mcp_conn.id)
                 prefix_idx = len(mcp_conn.id) + 1
-                client.start()
+                cleanup_fn: Callable[[], None] | None = None
+                cleanup_fn = start_managed_mcp_client(client)
                 client_used = False
                 page_token = None
                 while len(tools := client.list_tools_sync(page_token)) > 0:
@@ -141,11 +147,16 @@ def _discover_mcp_tools(config: AgentConfig, server_config: ServerConfig) -> Lis
                                 server_config.output.base_dir,
                             )
                             tool = with_result_file(tool, Path(output_base_path))
+                            tool = ResilientMCPToolAdapter(tool, client)
                             mcp_tools.append(tool)
                             client_used = True
                     if not page_token:
                         break
-                client_stop = lambda *_: client.stop(exc_type=None, exc_val=None, exc_tb=None)
+                def client_stop(*_):
+                    if cleanup_fn:
+                        cleanup_fn()
+                    else:
+                        client.stop(exc_type=None, exc_val=None, exc_tb=None)
                 if client_used:
                     atexit.register(client_stop)
                     signal.signal(signal.SIGTERM, client_stop)
@@ -634,20 +645,32 @@ Available {config.module} MCP tools:
         )
 
     # Build SystemContentBlock[] to enable provider-side prompt caching where supported
-    # Keep legacy string fallback for providers that may not support block lists
     system_prompt_payload: Any
     try:
-        if config.provider in ("bedrock", "litellm"):
-            # Minimal segmentation: treat the composed system prompt as a single block and
-            # add a cache point so supported backends can cache the stable portion.
-            # Providers that do not support caching simply ignore the hint.
+        from strands.types.content import SystemContentBlock
+
+        # Bedrock with Anthropic models: use cachePoint (SDK converts to cache_control)
+        if config.provider == "bedrock" and "anthropic.claude" in config.model_id:
+            logger.info("Enabling prompt caching for Bedrock Anthropic model: %s", config.model_id)
             system_prompt_payload = [
-                {"text": system_prompt},
-                {"cachePoint": {"type": "default"}},
+                SystemContentBlock(text=system_prompt),
+                SystemContentBlock(cachePoint={"type": "default"})
             ]
+        # LiteLLM with Gemini: explicit caching support
+        elif config.provider == "litellm" and "gemini" in config.model_id:
+            logger.info("Enabling prompt caching for Gemini model: %s", config.model_id)
+            system_prompt_payload = [
+                SystemContentBlock(text=system_prompt),
+                SystemContentBlock(cachePoint={"type": "default"})
+            ]
+        # Other providers: automatic caching (Azure, OpenAI, Grok) or no caching (Moonshot)
+        # Both cases work with plain text - no special handling needed
         else:
+            logger.debug("Using plain text system prompt for provider: %s, model: %s", config.provider, config.model_id)
             system_prompt_payload = system_prompt
-    except Exception:
+    except Exception as e:
+        # Fallback to plain text if SystemContentBlock not available
+        logger.warning("Failed to create SystemContentBlock, falling back to plain text: %s", e)
         system_prompt_payload = system_prompt
 
     # It works in both CLI and React modes
@@ -725,15 +748,15 @@ Available {config.module} MCP tools:
     # Tool router to prevent unknown-tool failures by routing to shell before execution
     # Allow configurable truncation of large tool outputs via env var
     try:
-        max_result_chars = int(os.getenv("CYBER_TOOL_MAX_RESULT_CHARS", "10000"))
+        max_result_chars = int(os.getenv("CYBER_TOOL_MAX_RESULT_CHARS", "30000"))
     except Exception:
-        max_result_chars = 10000
+        max_result_chars = 30000
     try:
         artifact_threshold = int(
-            os.getenv("CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD", str(max_result_chars))
+            os.getenv("CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD", "10000")
         )
     except Exception:
-        artifact_threshold = max_result_chars
+        artifact_threshold = 10000
     tool_router_hook = ToolRouterHook(
         shell,
         max_result_chars=max_result_chars,
@@ -787,6 +810,12 @@ Available {config.module} MCP tools:
                 config.model_id, config.region_name, config.provider
             )
             print_status(f"LiteLLM model initialized: {config.model_id}", "SUCCESS")
+        elif config.provider == "gemini":
+            agent_logger.debug("Configuring native GeminiModel")
+            model = create_gemini_model(
+                config.model_id, config.region_name, config.provider
+            )
+            print_status(f"Native Gemini model initialized: {config.model_id}", "SUCCESS")
         else:
             raise ValueError(f"Unsupported provider: {config.provider}")
 
@@ -806,8 +835,8 @@ Available {config.module} MCP tools:
         http_request,
         python_repl,
         browser_set_headers,
-        browser_get_page_html,
         browser_goto_url,
+        browser_get_page_html,
         browser_perform_action,
         browser_observe_page,
         browser_evaluate_js,
@@ -851,16 +880,18 @@ Available {config.module} MCP tools:
         )
     except (TypeError, ValueError):
         window_size = 30
-    window_size = max(10, window_size)
+    # Cap window size to 40 to prevent context overflow and tool blocking
+    # Reduced from 75 after observing SDK truncation at step 67 with 170 tools
+    window_size = min(40, max(10, window_size))
 
     # Create and register conversation manager for all agents (including swarm children)
-    # Use environment variable for preserve_last (default 12) to enable effective pruning
-    # If preserve_first (1) + preserve_last (20) >= total_messages, no pruning occurs
+    # Use environment variables for preservation to enable effective pruning
+    # Keep preserve_last low (12) to allow pruning: first (3) + last (12) = 15 preserved out of 120 window
     conversation_manager = MappingConversationManager(
         window_size=window_size,
         summary_ratio=0.3,
-        preserve_recent_messages=PRESERVE_LAST_DEFAULT,  # Use env default (12) instead of hardcoded 20
-        preserve_first_messages=PRESERVE_FIRST_DEFAULT,  # Explicit (default 1)
+        preserve_recent_messages=PRESERVE_LAST_DEFAULT,  # Env default: 12 (not 20!)
+        preserve_first_messages=PRESERVE_FIRST_DEFAULT,  # Env default: 1 (scripts often use 3)
         tool_result_mapper=LargeToolResultMapper(),
     )
     register_conversation_manager(conversation_manager)
@@ -876,10 +907,14 @@ Available {config.module} MCP tools:
         config.provider, server_config, config.model_id
     )
 
+    # Initialize concurrent tool executor for parallel execution
+    tool_executor = ConcurrentToolExecutor()
+
     agent_kwargs = {
         "model": model,
         "name": f"Cyber-AutoAgent {config.op_id or operation_id}",
         "tools": tools_list,
+        "tool_executor": tool_executor,
         "system_prompt": system_prompt_payload,
         "callback_handler": callback_handler,
         "hooks": hooks if hooks else None,  # Add hooks if available
@@ -942,6 +977,8 @@ Available {config.module} MCP tools:
                 "browser_get_page_html",
                 "browser_perform_action",
                 "browser_observe_page",
+                "browser_evaluate_js",
+                "browser_get_cookies",
             ],
             "tools.parallel_limit": 8,
             # Memory configuration

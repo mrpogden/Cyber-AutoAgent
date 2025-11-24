@@ -200,10 +200,11 @@ class PromptRebuildHook(HookProvider):
                 len(new_prompt) // 4,
             )
 
-            # AUTO-OPTIMIZE EXECUTION PROMPT (if step 20+)
-            # Optimize whenever we rebuild after step 20, not just at exact multiples
-            if current_step >= 20:
-                self._auto_optimize_execution_prompt()
+            # AUTO-OPTIMIZE EXECUTION PROMPT (if enabled and step 20+)
+            # Disabled by default to prevent LLM-based prompt modifications
+            if os.environ.get("CYBER_ENABLE_PROMPT_OPTIMIZER", "false").lower() == "true":
+                if current_step >= 20:
+                    self._auto_optimize_execution_prompt()
 
         except Exception as e:
             logger.error("Failed to rebuild prompt: %s", e, exc_info=True)
@@ -223,10 +224,9 @@ class PromptRebuildHook(HookProvider):
             if not plan_snapshot:
                 return False
 
-            # Extract current phase from snapshot
-            match = re.search(r"Phase (\d+)", plan_snapshot)
-            if match:
-                current_phase = int(match.group(1))
+            # Extract current phase using unified extraction method (handles TOON + text)
+            current_phase = self._extract_current_phase(plan_snapshot)
+            if current_phase is not None:
                 if self.last_phase is not None and current_phase != self.last_phase:
                     logger.info(
                         "Phase transition detected: %d -> %d",
@@ -350,8 +350,12 @@ class PromptRebuildHook(HookProvider):
     def _extract_current_phase(self, plan_snapshot: Optional[str]) -> Optional[int]:
         """Extract phase number from plan snapshot string.
 
+        Handles both TOON format and text format:
+        - TOON: "plan_overview[1]{objective,current_phase,total_phases}:\n  ...,2,3"
+        - Text: "Phase 2: Exploitation..."
+
         Args:
-            plan_snapshot: Plan snapshot string (e.g., "Phase 2: Exploitation...")
+            plan_snapshot: Plan snapshot string
 
         Returns:
             Phase number or None
@@ -360,11 +364,21 @@ class PromptRebuildHook(HookProvider):
             return None
 
         try:
-            match = re.search(r"Phase (\d+)", plan_snapshot)
-            if match:
-                return int(match.group(1))
-        except Exception:
-            pass
+            # Try TOON format first: extract current_phase from CSV row
+            # Pattern: "objective,current_phase,total_phases" → "...,2,3"
+            toon_match = re.search(
+                r'plan_overview\[1\]\{[^}]*current_phase[^}]*\}:\s*\n\s*[^,]+,(\d+),',
+                plan_snapshot
+            )
+            if toon_match:
+                return int(toon_match.group(1))
+
+            # Fallback: Try text format "Phase N"
+            text_match = re.search(r"Phase (\d+)", plan_snapshot)
+            if text_match:
+                return int(text_match.group(1))
+        except Exception as e:
+            logger.debug("Phase extraction failed: %s", e)
 
         return None
 
