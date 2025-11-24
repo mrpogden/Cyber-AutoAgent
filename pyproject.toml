@@ -33,7 +33,7 @@ dependencies = [
     "strands-agents-tools>=0.2.14",
     "mem0ai>=0.1.116",
     "google-genai>=0.3.0",
-    "litellm>=1.79.3",
+    "litellm==1.80.0",
     "azure-identity>=1.15.0",
     "boto3>=1.39.10",
     "botocore>=1.39.10",
