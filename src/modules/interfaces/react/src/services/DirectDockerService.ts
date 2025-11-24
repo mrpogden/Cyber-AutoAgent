@@ -396,6 +396,12 @@ export class DirectDockerService extends EventEmitter {
       if (config.conversationPreserveLast !== undefined) {
         env.push(`CYBER_CONVERSATION_PRESERVE_LAST=${config.conversationPreserveLast}`);
       }
+      if (config.toolMaxResultChars !== undefined) {
+        env.push(`CYBER_TOOL_MAX_RESULT_CHARS=${config.toolMaxResultChars}`);
+      }
+      if (config.toolArtifactThreshold !== undefined) {
+        env.push(`CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD=${config.toolArtifactThreshold}`);
+      }
 
       // Debug logging: what we're about to send to Docker
       const maskEnv = (vars: string[]) => {

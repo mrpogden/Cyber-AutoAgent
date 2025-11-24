@@ -132,6 +132,10 @@ const CONFIG_FIELDS: ConfigField[] = [
     description: 'System messages to always keep (default: 1). Maps to CYBER_CONVERSATION_PRESERVE_FIRST.' },
   { key: 'conversationPreserveLast', label: 'Preserve Last Messages', type: 'number', section: 'Operations',
     description: 'Recent messages to always keep (default: 12). Maps to CYBER_CONVERSATION_PRESERVE_LAST.' },
+  { key: 'toolMaxResultChars', label: 'Tool Max Result Size (chars)', type: 'number', section: 'Operations',
+    description: 'Max tool output size before truncation (default: 30000). Maps to CYBER_TOOL_MAX_RESULT_CHARS.' },
+  { key: 'toolArtifactThreshold', label: 'Tool Artifact Threshold (chars)', type: 'number', section: 'Operations',
+    description: 'Tool output size to externalize to artifacts/ (default: 50000). Maps to CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD.' },
 
   // Memory
   { key: 'memoryBackend', label: 'Memory Backend', type: 'select', section: 'Memory',

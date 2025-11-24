@@ -723,6 +723,8 @@ export class PythonExecutionService extends EventEmitter {
         ...(config.conversationWindow !== undefined ? { CYBER_CONVERSATION_WINDOW: String(config.conversationWindow) } : {}),
         ...(config.conversationPreserveFirst !== undefined ? { CYBER_CONVERSATION_PRESERVE_FIRST: String(config.conversationPreserveFirst) } : {}),
         ...(config.conversationPreserveLast !== undefined ? { CYBER_CONVERSATION_PRESERVE_LAST: String(config.conversationPreserveLast) } : {}),
+        ...(config.toolMaxResultChars !== undefined ? { CYBER_TOOL_MAX_RESULT_CHARS: String(config.toolMaxResultChars) } : {}),
+        ...(config.toolArtifactThreshold !== undefined ? { CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD: String(config.toolArtifactThreshold) } : {}),
         // Observability settings from config (matching Docker service behavior)
         ENABLE_OBSERVABILITY: config.observability ? 'true' : 'false',
         ENABLE_AUTO_EVALUATION: config.autoEvaluation ? 'true' : 'false',
