@@ -184,6 +184,54 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
         "netcat": "Network utility for reading/writing data",
         "curl": "HTTP client for web requests",
         "tcpdump": "Network packet capture",
+        # Binary Exploitation & Reversing
+        "gdb": "GNU Debugger",
+        "ltrace": "Library call tracer",
+        "strace": "System call tracer",
+        "radare2": "Reverse engineering framework",
+        "ropgadget": "ROP gadget finder",
+        "ropper": "ROP gadget finder and binary information",
+        # Steganography & Forensics
+        "steghide": "Steganography tool",
+        "binwalk": "Firmware analysis tool",
+        "foremost": "File carving tool",
+        "zsteg": "PNG/BMP steganography",
+        # Deserialization
+        "ysoserial": "Java deserialization payload generator",
+        "phpggc": "PHP generic gadget chains",
+        # SSRF
+        "gopherus": "SSRF payload generator",
+        # Tunneling & OOB
+        # Tunneling & OOB
+        "interactsh-client": "OOB interaction client",
+        "ligolo-proxy": "Advanced tunneling tool (Ligolo-ng)",
+        "chisel": "Fast TCP/UDP tunnel over HTTP",
+        # Password Cracking
+        "hashcat": "Advanced password recovery",
+        "kerbrute": "Kerberos pre-auth brute-forcing",
+        # Windows/AD
+        "enum4linux": "SMB enumeration tool",
+        "netexec": "Network service exploitation (SMB/WinRM/etc)",
+        "evil-winrm": "WinRM shell access",
+        # XSS Advanced
+        "xsstrike": "Advanced XSS detection suite",
+        "dalfox": "Parameter analysis and XSS scanning",
+        # Privilege Escalation
+        "linpeas": "Linux Privilege Escalation Awesome Script",
+        "pwncat-cs": "Advanced reverse shell handler",
+        # C2 & Post-Exploitation
+        "sliver": "Command and Control framework",
+        # Active Directory Advanced
+        "bloodhound-python": "AD ingestor for BloodHound",
+        "certipy": "Active Directory Certificate Services abuse",
+        "coercer": "Active Directory coercion attacks",
+        "responder": "LLMNR/NBT-NS poisoner",
+        # Secrets & Git
+        "trufflehog": "Find leaked credentials",
+        "gitdumper": "Dump git repositories from websites",
+        # Cryptography & Forensics
+        "rsactftool": "RSA attack tool",
+        "volatility": "Memory forensics framework",
     }
 
     # Map tool names to their checkable binary names
@@ -202,6 +250,35 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
         "jwt-decode": "jwt-decode",
         "tplmap": "tplmap",
         "cookiecutter": "cookiecutter",
+        # Deserialization wrappers
+        "ysoserial": "ysoserial",
+        "phpggc": "phpggc",
+        "gopherus": "gopherus",
+        # Tunneling
+        "ligolo-proxy": "ligolo-proxy",
+        "chisel": "chisel",
+        # Windows/AD
+        "netexec": "nxc",  # NetExec binary is 'nxc'
+        "evil-winrm": "evil-winrm",
+        "kerbrute": "kerbrute",
+        "bloodhound-python": "bloodhound-python",
+        "certipy": "certipy",
+        "coercer": "coercer",
+        "responder": "responder",
+        # XSS
+        "xsstrike": "xsstrike",
+        "dalfox": "dalfox",
+        # PrivEsc
+        "linpeas": "linpeas",
+        "pwncat-cs": "pwncat-cs",
+        # C2
+        "sliver": "sliver",
+        # Secrets
+        "trufflehog": "trufflehog",
+        "gitdumper": "gitdumper",
+        # Crypto/Forensics
+        "rsactftool": "rsactftool",
+        "volatility": "vol",
     }
 
     available_tools = []
