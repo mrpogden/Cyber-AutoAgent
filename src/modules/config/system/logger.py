@@ -58,6 +58,7 @@ def configure_sdk_logging(enable_debug: bool = False) -> None:
     """Configure logging for Strands SDK components.
 
     Suppresses benign tool registry warnings and optionally enables verbose SDK logging.
+    Silences verbose LiteLLM DEBUG output to prevent log bloat.
 
     Args:
         enable_debug: If True, enable verbose logging for SDK components
@@ -83,12 +84,16 @@ def configure_sdk_logging(enable_debug: bool = False) -> None:
     logging.getLogger("strands_tools").setLevel(log_level)
     logging.getLogger("strands_tools.swarm").setLevel(log_level)
 
-    # Also set our own modules to INFO level
+    # Silence verbose LiteLLM DEBUG logging
+    logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+    logging.getLogger("litellm").setLevel(logging.WARNING)
+    logging.getLogger("strands.models.litellm").setLevel(logging.INFO)
+
     logging.getLogger("modules.handlers").setLevel(log_level)
     logging.getLogger("modules.handlers.react").setLevel(log_level)
 
     logger = get_logger("Config.SDK")
-    logger.info("SDK verbose logging enabled")
+    logger.info("SDK logging configured")
 
 
 def reset_logger_factory() -> None:
