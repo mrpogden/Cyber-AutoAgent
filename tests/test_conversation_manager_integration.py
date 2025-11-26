@@ -26,7 +26,21 @@ from modules.handlers.conversation_budget import (
     _estimate_prompt_tokens,
     _ensure_prompt_within_budget,
     MappingConversationManager,
+    SYSTEM_PROMPT_OVERHEAD_TOKENS,
+    TOOL_DEFINITIONS_OVERHEAD_TOKENS,
+    MESSAGE_METADATA_OVERHEAD_TOKENS,
 )
+
+
+def _expected_tokens(char_count: int, ratio: float, num_messages: int = 1) -> int:
+    """Calculate expected tokens with overhead constants."""
+    overhead = (
+        SYSTEM_PROMPT_OVERHEAD_TOKENS
+        + TOOL_DEFINITIONS_OVERHEAD_TOKENS
+        + num_messages * MESSAGE_METADATA_OVERHEAD_TOKENS
+    )
+    content_tokens = max(1, int(char_count / ratio))
+    return overhead + content_tokens
 
 
 # ============================================================================
@@ -79,6 +93,14 @@ def config_manager_with_mock_client(mock_models_client):
         yield manager
 
 
+class MockModelConfig:
+    """Mock model with config for testing."""
+
+    def __init__(self, model_id: str):
+        self.model_id = model_id
+        self.config = {"model_id": model_id}
+
+
 class AgentStub:
     """Mock agent for testing conversation management."""
 
@@ -91,7 +113,7 @@ class AgentStub:
         name: str = "test_agent"
     ):
         self.messages = messages
-        self.model = model
+        self.model = MockModelConfig(model) if model else None
         self._prompt_token_limit = limit
         self.name = name
 
@@ -172,51 +194,50 @@ class TestDynamicRatioTokenEstimation:
     def test_claude_estimation_accuracy(self, mock_models_client):
         """Test Claude estimation uses 3.7 ratio for accuracy."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 1000 chars with Claude 3.7 ratio = ~270 tokens
             agent = AgentStub(
                 messages=[make_message("x" * 1000)],
                 model="anthropic/claude-sonnet-4-5-20250929"
             )
             estimated = _estimate_prompt_tokens(agent)
+            expected = _expected_tokens(1000, 3.7, 1)
 
-            # 1000 / 3.7 = 270.27 -> 270 tokens
-            assert estimated == int(1000 / 3.7), f"Expected {int(1000 / 3.7)}, got {estimated}"
+            assert estimated == expected, f"Expected {expected}, got {estimated}"
 
     def test_gpt_estimation_accuracy(self, mock_models_client):
         """Test GPT estimation uses 4.0 ratio for accuracy."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 1000 chars with GPT 4.0 ratio = 250 tokens
             agent = AgentStub(
                 messages=[make_message("x" * 1000)],
                 model="azure/gpt-5"
             )
             estimated = _estimate_prompt_tokens(agent)
+            expected = _expected_tokens(1000, 4.0, 1)
 
-            assert estimated == 250, f"Expected 250, got {estimated}"
+            assert estimated == expected, f"Expected {expected}, got {estimated}"
 
     def test_kimi_estimation_accuracy(self, mock_models_client):
         """Test Kimi estimation uses 3.8 ratio for accuracy."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 1000 chars with Kimi 3.8 ratio = ~263 tokens
             agent = AgentStub(
                 messages=[make_message("x" * 1000)],
                 model="moonshot/kimi-k2-thinking"
             )
             estimated = _estimate_prompt_tokens(agent)
+            expected = _expected_tokens(1000, 3.8, 1)
 
-            assert estimated == int(1000 / 3.8), f"Expected {int(1000 / 3.8)}, got {estimated}"
+            assert estimated == expected, f"Expected {expected}, got {estimated}"
 
     def test_gemini_estimation_accuracy(self, mock_models_client):
         """Test Gemini estimation uses 4.2 ratio for accuracy."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 1000 chars with Gemini 4.2 ratio = ~238 tokens
             agent = AgentStub(
                 messages=[make_message("x" * 1000)],
                 model="google/gemini-2.5-flash"
             )
             estimated = _estimate_prompt_tokens(agent)
+            expected = _expected_tokens(1000, 4.2, 1)
 
-            assert estimated == int(1000 / 4.2), f"Expected {int(1000 / 4.2)}, got {estimated}"
+            assert estimated == expected, f"Expected {expected}, got {estimated}"
 
 
 # ============================================================================
@@ -404,17 +425,19 @@ class TestSpecialistFlowIntegration:
                 limit=272000
             )
 
-            # Specialist with swarm model (should get safe limit)
+            # Specialist with swarm model (should get safe limit that accounts for overhead)
+            # Overhead = 8000 + 3000 + 50 = 11050 tokens just for system/tools/metadata
+            # So safe limit must exceed overhead to allow any content
             specialist = AgentStub(
                 messages=[make_message("specialist task")],
                 model="azure/gpt-4o",
-                limit=8192  # Safe limit from models.dev
+                limit=20000  # Safe limit that accounts for overhead
             )
 
             # Estimate tokens for specialist
             estimated = _estimate_prompt_tokens(specialist)
 
-            # Should not exceed safe limit
+            # Should not exceed safe limit (includes overhead)
             assert estimated < specialist._prompt_token_limit, \
                 f"Specialist estimated {estimated} tokens exceeds safe limit {specialist._prompt_token_limit}"
 
@@ -451,53 +474,56 @@ class TestBudgetEnforcementAccuracy:
     def test_claude_budget_enforcement(self, mock_models_client):
         """Test Claude models trigger reduction at correct threshold with 3.7 ratio."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 80% threshold = 800 tokens
-            # With 3.7 ratio: 800 * 3.7 = 2960 chars needed
+            # Use a limit that accounts for overhead (11050) plus content
+            # 65% threshold of 20000 = 13000 tokens
+            # Overhead = 11050, so we need content of 13000 - 11050 = 1950 tokens
+            # With 3.7 ratio: 1950 * 3.7 = ~7215 chars needed
             agent = AgentStub(
-                messages=[make_message("x" * 1500)] * 2,  # 3000 chars total
+                messages=[make_message("x" * 4000)] * 2,  # 8000 chars total
                 model="anthropic/claude-sonnet-4-5-20250929",
-                limit=1000
+                limit=20000
             )
 
             _ensure_prompt_within_budget(agent)
 
-            # Should trigger reduction because 3000/3.7 = 811 tokens > 800 (80%)
+            # Should trigger reduction because content tokens + overhead exceed threshold
             assert len(agent.conversation_manager.calls) > 0, \
-                "Should trigger reduction at 80% threshold with Claude 3.7 ratio"
+                "Should trigger reduction when exceeding threshold"
 
     def test_gpt_budget_enforcement(self, mock_models_client):
         """Test GPT models trigger reduction at correct threshold with 4.0 ratio."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 80% threshold = 800 tokens
-            # With 4.0 ratio: 800 * 4.0 = 3200 chars needed
             agent = AgentStub(
-                messages=[make_message("x" * 1600)] * 2,  # 3200 chars total
+                messages=[make_message("x" * 4000)] * 2,  # 8000 chars total
                 model="azure/gpt-5",
-                limit=1000
+                limit=20000
             )
 
             _ensure_prompt_within_budget(agent)
 
-            # Should trigger reduction because 3200/4.0 = 800 tokens = 80%
+            # Should trigger reduction when exceeding threshold
             assert len(agent.conversation_manager.calls) > 0, \
-                "Should trigger reduction at 80% threshold with GPT 4.0 ratio"
+                "Should trigger reduction when exceeding threshold"
 
     def test_no_false_positives_below_threshold(self, mock_models_client):
-        """Test no reduction triggered when below 80% threshold."""
+        """Test no reduction triggered when below 65% threshold."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
-            # 70% threshold = 700 tokens
-            # With 3.7 ratio: 700 * 3.7 = 2590 chars
+            # Use a high limit where overhead + small content is well below threshold
+            # Limit = 50000, 65% threshold = 32500
+            # Overhead = 11050 + 2*50 = 11150 (for 2 messages)
+            # Small content: 100 chars / 3.7 = ~27 tokens
+            # Total = 11177 tokens, well below 32500
             agent = AgentStub(
-                messages=[make_message("x" * 1200)] * 2,  # 2400 chars total
+                messages=[make_message("x" * 50)] * 2,  # 100 chars total
                 model="anthropic/claude-sonnet-4-5-20250929",
-                limit=1000
+                limit=50000
             )
 
             _ensure_prompt_within_budget(agent)
 
-            # Should NOT trigger because 2400/3.7 = 649 tokens < 800 (80%)
+            # Should NOT trigger because we're well below threshold
             assert len(agent.conversation_manager.calls) == 0, \
-                "Should not trigger reduction below 80% threshold"
+                "Should not trigger reduction below threshold"
 
 
 # ============================================================================
@@ -541,7 +567,7 @@ class TestExpectedBehaviorValidation:
                 f"Model {model_id}: expected safe max_tokens {expected_safe}, got {actual_safe}"
 
     def test_estimation_accuracy_within_1_percent(self, mock_models_client):
-        """Test token estimation accuracy is within ±1% for all models."""
+        """Test token estimation accuracy is within ±1 token for all models."""
         with patch('modules.handlers.conversation_budget.get_models_client', return_value=mock_models_client):
             test_cases = [
                 ("anthropic/claude-sonnet-4-5-20250929", 10000, 3.7),
@@ -557,8 +583,262 @@ class TestExpectedBehaviorValidation:
                 )
 
                 estimated = _estimate_prompt_tokens(agent)
-                expected = int(char_count / ratio)
+                expected = _expected_tokens(char_count, ratio, 1)
 
                 # Allow ±1 token difference (rounding)
                 assert abs(estimated - expected) <= 1, \
                     f"Model {model_id}: expected ~{expected} tokens, got {estimated}"
+
+
+# ============================================================================
+# Pipeline Integration: Threshold Alignment Tests
+# ============================================================================
+
+
+class TestThresholdAlignment:
+    """Test that ToolRouterHook and LargeToolResultMapper thresholds work together.
+
+    Production pipeline:
+    1. ToolRouterHook externalizes outputs > artifact_threshold (10K) to artifacts/
+    2. LargeToolResultMapper compresses tool results > compress_threshold (40K)
+
+    If artifact_threshold < compress_threshold, the mapper acts as a safety net
+    for edge cases where externalization fails or is bypassed.
+    """
+
+    def test_compress_threshold_derived_from_artifact_threshold(self):
+        """Verify compression threshold is derived from artifact threshold.
+
+        The compression threshold is NOT user-configurable. It's derived as 4x
+        the artifact externalization threshold to ensure:
+        - ToolRouterHook externalizes at 10K chars (first line of defense)
+        - LargeToolResultMapper compresses at 40K chars (safety net only)
+
+        This prevents misconfiguration where compression < externalization.
+        """
+        from modules.handlers.conversation_budget import (
+            TOOL_COMPRESS_THRESHOLD,
+            _TOOL_ARTIFACT_THRESHOLD,
+        )
+
+        # Compression threshold must be 4x artifact threshold
+        assert TOOL_COMPRESS_THRESHOLD == _TOOL_ARTIFACT_THRESHOLD * 4, (
+            f"Compression threshold ({TOOL_COMPRESS_THRESHOLD}) must be 4x "
+            f"artifact threshold ({_TOOL_ARTIFACT_THRESHOLD})"
+        )
+
+        # Verify the relationship
+        assert _TOOL_ARTIFACT_THRESHOLD == 10000, "Artifact threshold should be 10K"
+        assert TOOL_COMPRESS_THRESHOLD == 40000, "Compression threshold should be 40K"
+
+    def test_mapper_acts_as_safety_net(self):
+        """Test that mapper compresses results that bypass externalization."""
+        from modules.handlers.conversation_budget import (
+            LargeToolResultMapper,
+            TOOL_COMPRESS_THRESHOLD,
+            TOOL_COMPRESS_TRUNCATE,
+        )
+
+        mapper = LargeToolResultMapper(
+            max_tool_chars=TOOL_COMPRESS_THRESHOLD,
+            truncate_at=TOOL_COMPRESS_TRUNCATE,
+        )
+
+        # Simulate a result that bypassed externalization (edge case)
+        large_result = "X" * (TOOL_COMPRESS_THRESHOLD + 5000)
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "bypass_test",
+                        "status": "success",
+                        "content": [{"text": large_result}],
+                    }
+                }
+            ],
+        }
+
+        result = mapper(message, 0, [message])
+
+        # Mapper should compress this oversized result
+        compressed_text = result["content"][0]["toolResult"]["content"][0]["text"]
+        assert len(compressed_text) < len(large_result), (
+            "Mapper should compress results exceeding threshold"
+        )
+        assert "compressed" in compressed_text.lower(), (
+            "Compressed result should indicate compression"
+        )
+
+    def test_normal_operation_no_compression_needed(self):
+        """Test that externalized results (summaries) don't trigger compression.
+
+        This validates the production behavior where:
+        1. Large outputs are externalized by ToolRouterHook
+        2. Only summaries (<10K) enter conversation
+        3. Mapper correctly reports 'no compression needed'
+        """
+        from modules.handlers.conversation_budget import (
+            LargeToolResultMapper,
+            TOOL_COMPRESS_THRESHOLD,
+        )
+
+        mapper = LargeToolResultMapper(max_tool_chars=TOOL_COMPRESS_THRESHOLD)
+
+        # Simulate externalized result (summary with artifact reference)
+        externalized_summary = (
+            "[Tool output: 125,432 chars total | Preview: 4,000 chars below | "
+            "Full: artifacts/nmap_20241124_143022_a1b2c3.log]\n\n"
+            + "X" * 4000  # 4K preview - well under 40K threshold
+        )
+
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "externalized_test",
+                        "status": "success",
+                        "content": [{"text": externalized_summary}],
+                    }
+                }
+            ],
+        }
+
+        result = mapper(message, 0, [message])
+
+        # Result should be unchanged - no compression needed
+        result_text = result["content"][0]["toolResult"]["content"][0]["text"]
+        assert result_text == externalized_summary, (
+            "Externalized summaries should pass through unchanged"
+        )
+
+    def test_sliding_window_handles_accumulated_small_messages(self):
+        """Test that sliding window manages growth from many small messages.
+
+        When externalization works correctly:
+        - Individual messages are small (<10K chars each)
+        - Mapper reports 'no compression needed' (correct)
+        - Sliding window caps total message count
+        - Token budget is managed by window, not compression
+        """
+        manager = MappingConversationManager(
+            window_size=10,
+            preserve_first_messages=1,
+            preserve_recent_messages=3,
+        )
+
+        # Create 15 small messages (each ~500 chars, well under thresholds)
+        messages = []
+        for i in range(15):
+            messages.append({
+                "role": "user" if i % 2 == 0 else "assistant",
+                "content": [{"text": f"Message {i}: " + "x" * 500}],
+            })
+
+        agent = AgentStub(messages=messages, model="test/model", limit=100000)
+
+        # Apply management
+        manager.apply_management(agent)
+
+        # Sliding window should cap at 10 messages
+        assert len(agent.messages) <= 10, (
+            f"Sliding window should cap messages at 10, got {len(agent.messages)}"
+        )
+
+    def test_preservation_zone_configuration(self):
+        """Test that preservation zone doesn't block all pruning."""
+        manager = MappingConversationManager(
+            window_size=100,
+            preserve_first_messages=1,
+            preserve_recent_messages=12,  # Current default
+        )
+
+        total_preserved = manager.preserve_first + manager.preserve_last
+
+        # Preservation should not exceed 50% of window
+        max_preserved = int(100 * 0.5)
+        assert total_preserved <= max_preserved, (
+            f"Preservation zone ({total_preserved}) exceeds 50% of window ({max_preserved})"
+        )
+
+        # With 100-message window, pruning should be possible at message 14+
+        min_messages_for_pruning = total_preserved + 1
+        assert min_messages_for_pruning == 14, (
+            f"Pruning should be possible at message {min_messages_for_pruning}"
+        )
+
+
+class TestFullPipelineSimulation:
+    """Simulate the full context management pipeline behavior."""
+
+    def test_pipeline_with_mixed_output_sizes(self):
+        """Simulate realistic operation with mixed tool output sizes."""
+        from modules.handlers.conversation_budget import (
+            LargeToolResultMapper,
+            TOOL_COMPRESS_THRESHOLD,
+        )
+
+        mapper = LargeToolResultMapper(max_tool_chars=TOOL_COMPRESS_THRESHOLD)
+        manager = MappingConversationManager(
+            window_size=20,
+            preserve_first_messages=1,
+            preserve_recent_messages=5,
+        )
+
+        messages = []
+        compression_count = 0
+
+        # Simulate 25 tool executions with varying output sizes
+        for i in range(25):
+            # Most outputs are externalized (simulated as summaries)
+            if i % 10 == 0:
+                # Edge case: Large result that bypassed externalization
+                content = "X" * (TOOL_COMPRESS_THRESHOLD + 1000)
+            else:
+                # Normal: Externalized summary
+                content = f"[Tool output externalized to artifacts/tool_{i}.log]\n" + "x" * 2000
+
+            message = {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": f"tool_{i}",
+                            "status": "success",
+                            "content": [{"text": content}],
+                        }
+                    }
+                ],
+            }
+
+            # Apply mapper (simulates LargeToolResultMapper in pipeline)
+            mapped = mapper(message, i, messages + [message])
+            if mapped != message:
+                compression_count += 1
+            messages.append(mapped)
+
+            # Add assistant response
+            messages.append({
+                "role": "assistant",
+                "content": [{"text": f"Analyzed tool {i} output."}],
+            })
+
+        # Create agent with accumulated messages
+        agent = AgentStub(messages=messages, model="test/model", limit=200000)
+
+        # Apply sliding window
+        initial_count = len(agent.messages)
+        manager.apply_management(agent)
+        final_count = len(agent.messages)
+
+        # Verify behaviors
+        assert compression_count >= 2, (
+            f"Expected at least 2 compressions for edge cases, got {compression_count}"
+        )
+        assert final_count <= 20, (
+            f"Sliding window should cap at 20, got {final_count}"
+        )
+        assert final_count < initial_count, (
+            f"Window should reduce messages: {initial_count} -> {final_count}"
+        )
