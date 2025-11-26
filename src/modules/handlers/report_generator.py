@@ -78,7 +78,7 @@ def generate_security_report(
         if evidence is None:
             evidence = _retrieve_evidence_from_memory(operation_id)
 
-        # Validate evidence collection - skip report if no memories
+        # Validate evidence collection - skip report only if truly no memories
         if not evidence or len(evidence) == 0:
             logger.info(
                 "No evidence/memories collected for operation %s - skipping report generation",
@@ -86,12 +86,24 @@ def generate_security_report(
             )
             return ""
 
+        # Count different evidence types
         finding_count = len([e for e in evidence if e.get("category") == "finding"])
+        observation_count = len([e for e in evidence if e.get("category") == "observation"])
+        discovery_count = len([e for e in evidence if e.get("category") == "discovery"])
+        signal_count = len([e for e in evidence if e.get("category") == "signal"])
+
         logger.info(
-            "Retrieved %d pieces of evidence (%d findings) for report generation",
+            "Retrieved %d pieces of evidence for report: %d findings, %d observations, %d discoveries, %d signals",
             len(evidence),
             finding_count,
+            observation_count,
+            discovery_count,
+            signal_count,
         )
+
+        # Generate report even with only observations (partial results)
+        if finding_count == 0:
+            logger.info("No findings, but generating report with observations/discoveries")
 
         # Get module report prompt if available for domain guidance
         module_report_prompt = _get_module_report_prompt(module)
@@ -300,32 +312,100 @@ def _retrieve_evidence_from_memory(_operation_id: str) -> List[Dict[str, Any]]:
             )
             return evidence
 
-        # Retrieve memories for this operation
-        # Pass both user_id and agent_id since memories are stored with both
-        memories_response = memory_client.list_memories(
-            user_id="cyber_agent", agent_id="cyber_agent"
-        )
-
-        # Parse memory response
-        if isinstance(memories_response, dict):
-            raw_memories = memories_response.get(
-                "memories", memories_response.get("results", [])
-            )
-        elif isinstance(memories_response, list):
-            raw_memories = memories_response
-        else:
-            raw_memories = []
-
-        # Prefer operation-scoped memories if tagged; fallback to all if none
-        op_scoped_memories = []
+        # Use native mem0 search with run_id for O(log n) indexed lookup
+        # Note: With per-operation isolation, this queries current operation's store only
+        # Cross-learning requires explicit querying of other operation stores
         try:
-            for m in raw_memories:
-                meta = m.get("metadata", {}) or {}
-                if str(meta.get("operation_id", "")) == str(_operation_id):
-                    op_scoped_memories.append(m)
-        except Exception:
-            op_scoped_memories = []
-        scoped = op_scoped_memories or raw_memories
+            logger.info("Retrieving evidence for operation %s", _operation_id)
+
+            # Primary: Search with run_id for operation-scoped memories
+            # Note: Use simple list format for FAISS compatibility (not {"in": [...]} syntax)
+            op_scoped_memories = memory_client.search(
+                query="findings evidence observations discoveries signals",
+                user_id="cyber_agent",
+                agent_id="cyber_agent",
+                run_id=_operation_id,  # Native operation scoping (mem0 1.0.0 API)
+                filters={
+                    "category": ["finding", "signal", "observation", "discovery"]
+                },
+                limit=100
+            )
+
+            # Debug: Log what was found
+            if op_scoped_memories:
+                categories = {}
+                for m in op_scoped_memories:
+                    cat = m.get("metadata", {}).get("category", "MISSING")
+                    categories[cat] = categories.get(cat, 0) + 1
+                logger.debug("Operation-scoped search returned categories: %s", categories)
+
+            if op_scoped_memories:
+                scoped = op_scoped_memories
+                logger.info(
+                    "Found %d operation-scoped memories for %s using native run_id filtering",
+                    len(op_scoped_memories),
+                    _operation_id,
+                )
+                logger.info(
+                    "Per-operation isolation mode: Memories are from current operation only. "
+                    "Cross-learning disabled (set MEMORY_ISOLATION=shared for sequential cross-learning)."
+                )
+            else:
+                # Fallback: Cross-operation learning - search without session_id
+                # This enables agents to learn from previous operations
+                logger.info(
+                    "No operation-specific memories found for %s, searching for general evidence (cross-operation learning)",
+                    _operation_id
+                )
+
+                general_evidence = memory_client.search(
+                    query="findings evidence observations discoveries signals",
+                    user_id="cyber_agent",
+                    agent_id="cyber_agent",
+                    # No session_id = search across all operations
+                    filters={
+                        "category": ["finding", "signal", "observation", "discovery"]
+                    },
+                    limit=50
+                )
+
+                if general_evidence:
+                    logger.warning(
+                        "Using %d general evidence from memory store for cross-operation learning",
+                        len(general_evidence),
+                    )
+                    scoped = general_evidence
+                else:
+                    logger.warning(
+                        "No memories found for operation %s and no general evidence available",
+                        _operation_id,
+                    )
+                    scoped = []
+        except Exception as search_error:
+            logger.error(
+                "Error during native mem0 search: %s, falling back to legacy list+filter",
+                search_error
+            )
+            # Legacy fallback: list_memories + local filtering
+            memories_response = memory_client.list_memories(
+                user_id="cyber_agent", agent_id="cyber_agent"
+            )
+
+            # Parse and filter locally (legacy O(n) approach)
+            if isinstance(memories_response, dict):
+                raw_memories = memories_response.get(
+                    "memories", memories_response.get("results", [])
+                )
+            elif isinstance(memories_response, list):
+                raw_memories = memories_response
+            else:
+                raw_memories = []
+
+            scoped = [
+                m for m in raw_memories
+                if m.get("metadata", {}).get("category") in ["finding", "signal", "observation", "discovery"]
+            ]
+            logger.warning("Using legacy filtering, found %d memories", len(scoped))
 
         # Filter and format memories
         for mem in scoped:
@@ -333,11 +413,12 @@ def _retrieve_evidence_from_memory(_operation_id: str) -> List[Dict[str, Any]]:
             memory_content = mem.get("memory", "")
             memory_id = mem.get("id", "")
 
-            # Include items explicitly tagged as findings
-            if metadata.get("category") == "finding":
+            # Include items explicitly tagged with evidence-related categories
+            # Accept multiple categories: finding, signal, observation, discovery
+            if metadata.get("category") in ["finding", "signal", "observation", "discovery"]:
                 evidence.append(
                     {
-                        "category": "finding",
+                        "category": metadata.get("category", "finding"),
                         "content": memory_content,
                         "id": memory_id,
                         "severity": metadata.get("severity", "unknown"),
@@ -346,7 +427,8 @@ def _retrieve_evidence_from_memory(_operation_id: str) -> List[Dict[str, Any]]:
                 )
                 continue
 
-            # Heuristic: include structured evidence entries with markers as findings
+            # Heuristic: include structured evidence entries with security markers as findings
+            # General security markers - applies to all assessment types
             if any(
                 marker in str(memory_content)
                 for marker in [
@@ -354,6 +436,9 @@ def _retrieve_evidence_from_memory(_operation_id: str) -> List[Dict[str, Any]]:
                     "[FINDING]",
                     "[DISCOVERY]",
                     "[SIGNAL]",
+                    "[EXPLOIT]",
+                    "[EVIDENCE]",
+                    "[SUCCESS]",
                 ]
             ):
                 evidence.append(
@@ -383,7 +468,24 @@ def _retrieve_evidence_from_memory(_operation_id: str) -> List[Dict[str, Any]]:
                     }
                 )
 
-        logger.info("Retrieved %d pieces of evidence from memory", len(evidence))
+        # Diagnostic logging for memory retrieval debugging
+        operation_ids = {}
+        categories = {}
+        for m in scoped:
+            meta = m.get("metadata", {}) or {}
+            op_id = meta.get("operation_id", "NO_OP_ID")
+            cat = meta.get("category", "NO_CATEGORY")
+            operation_ids[op_id] = operation_ids.get(op_id, 0) + 1
+            categories[cat] = categories.get(cat, 0) + 1
+
+        non_findings_count = len(scoped) - len(evidence)
+        logger.info(
+            "Retrieved %d pieces of evidence from memory (filtered out %d non-findings: %s)",
+            len(evidence),
+            non_findings_count,
+            ", ".join(f"{k}={v}" for k, v in categories.items()),
+        )
+        logger.debug("Memory operation_ids: %s", dict(operation_ids))
 
     except Exception as e:
         logger.warning("Error retrieving evidence from memory: %s", e)

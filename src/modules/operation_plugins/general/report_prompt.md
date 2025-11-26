@@ -1,6 +1,11 @@
 <module_report_configuration>
 Module: General Web Application Security Assessment
 Focus: OWASP Top 10, authentication flaws, input validation, configuration issues
+
+**CRITICAL**: This prompt is for POST-OPERATION report generation ONLY
+- Invoked by separate report_agent AFTER main agent calls stop()
+- Main execution agent MUST NOT create summary/report files during operation
+- Reports created during execution violate termination protocol
 </module_report_configuration>
 
 <general_report_structure>
@@ -16,12 +21,14 @@ Group findings by attack vector potential:
 - Map technical findings to business processes (payment bypass, data exfiltration paths, privilege escalation chains)
 - Highlight where multiple small issues create critical exposure (info disclosure + weak session → full compromise)
 
-**Confidence-Based Severity Classification**:
-- CRITICAL: Verified exploitability (≥90% confidence) with proof artifacts + immediate business impact
-- HIGH: Likely exploitable (70-89% confidence) with clear attack path + significant risk
-- MEDIUM: Potentially exploitable (50-69% confidence) requiring additional conditions or chaining
-- LOW: Theoretical risk (<50% confidence) or requires significant attacker resources
-- INFO: Configuration weaknesses, best practices, defensive gaps (no direct exploit path)
+**Severity Classification** (validate before assignment):
+- CRITICAL: Runtime exploitation + no user action + immediate impact + no mitigating factors. Confidence ≥85%
+- HIGH: Exploitation proven OR strong code review + partial PoC. Requires user interaction OR chained conditions. Confidence 70-95%
+- MEDIUM: Pattern recognized, limited validation. Requires multiple conditions. Confidence 50-75%
+- LOW: Hypothesis with minimal testing. Significant exploitation barriers. Confidence <50%
+- INFO: Observations, misconfigurations, best practices. No exploit path proven
+
+Note: Environmental constraints (library unavailable, no test accounts) cap confidence at 85% - mark as "partial validation" not "unverified"
 
 **Finding Structure Requirements**:
 Each finding MUST include:
