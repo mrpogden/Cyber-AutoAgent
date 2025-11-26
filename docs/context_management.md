@@ -1,31 +1,32 @@
 # Context Management
 
-## Overview
+## Abstract
 
 Language models have finite conversation windows. During long security assessments that run for hours with hundreds of tool executions, the conversation can quickly exceed these limits. Cyber-AutoAgent solves this through automated context management that monitors token usage, compresses large outputs, removes old messages, and saves complete evidence to disk.
+The system guarantees operational continuity under context pressure while preserving evidence integrity for forensic reporting.
 
-The system never fails due to context overflow. Operations continue reliably while maintaining full evidence chains for final reporting.
+## System Architecture
 
-## Architecture
+### Reduction Layer Hierarchy
 
-The system uses four reduction layers that activate sequentially as needed:
+The context management system employs a four-layer reduction cascade, where each layer activates only when preceding layers prove insufficient:
 
 ```mermaid
-graph LR
-    A[Tool Execution] --> B{Size Check}
-    B -->|>10KB| C[Artifacts]
-    B -->|≤10KB| D[Conversation]
+graph TD
+    A[Tool Execution] --> B{Output Size Analysis}
+    B -->|"> 10KB"| C[Artifact Externalization]
+    B -->|"≤ 10KB"| D[Conversation Integration]
 
     C --> D
-    D --> E{Token Check}
+    D --> E{Token Budget Check}
 
-    E -->|<80%| F[Continue]
-    E -->|≥80%| G[Reduce Context]
+    E -->|"< 65% capacity"| F[Continue Execution]
+    E -->|"≥ 65% capacity"| G[Initiate Reduction]
 
-    G --> H[Layer 1: Pruning]
-    H --> I[Layer 2: Sliding Window]
-    I --> J[Layer 3: Summarization]
-    J --> K[Layer 4: Escalation]
+    G --> H["Layer 1: Tool Result Compression<br/>(threshold: 40K chars)"]
+    H --> I["Layer 2: Sliding Window<br/>(window: 100 messages)"]
+    I --> J["Layer 3: LLM Summarization<br/>(ratio: 30%)"]
+    J --> K["Layer 4: Escalation<br/>(max 2 passes, 30s budget)"]
 
     K --> F
 
@@ -35,322 +36,440 @@ graph LR
     style G fill:#0f172a,stroke:#818cf8,color:#f8fafc
 ```
 
-### How It Works
+### Event-Driven Execution Model
+
+Context management integrates with the Strands SDK event loop through hook callbacks:
 
 ```mermaid
 sequenceDiagram
-    participant Tool
+    participant Tool as Tool Executor
     participant Router as ToolRouterHook
-    participant Hook as PromptBudgetHook
-    participant Manager as ConversationManager
-    participant Agent
+    participant Budget as PromptBudgetHook
+    participant Manager as MappingConversationManager
+    participant Agent as Agent Instance
 
-    Tool->>Router: Large output (50KB)
-    Router->>Router: Check size > 10KB
-    Router->>Router: Save to artifacts/
-    Router->>Agent: Summary + path
+    Tool->>Router: AfterToolCallEvent (large output)
+    Router->>Router: Evaluate size threshold (>10KB)
+    Router->>Router: Persist to artifacts/
+    Router->>Agent: Inject summary with artifact reference
 
-    Agent->>Hook: BeforeInvocation
-    Hook->>Hook: Check tokens
+    Agent->>Budget: BeforeModelCallEvent
+    Budget->>Budget: Strip reasoning content blocks
+    Budget->>Manager: apply_management(agent)
+    Budget->>Budget: Estimate token consumption
 
-    alt Tokens ≥ 80%
-        Hook->>Manager: reduce_context()
-        Manager->>Manager: Layer 1: Prune
-        Manager->>Manager: Layer 2: Sliding
+    alt Token usage ≥ 65% of limit
+        Budget->>Manager: reduce_context(agent)
+        Manager->>Manager: Layer 1: Compress tool results
+        Manager->>Manager: Layer 2: Apply sliding window
 
-        alt Still over limit
-            Manager->>Manager: Layer 3: Summarize
+        alt ContextWindowOverflowException
+            Manager->>Manager: Layer 3: Generate summary
         end
 
-        alt Tokens ≥ 90%
-            Manager->>Manager: Layer 4: Escalate
+        alt Token usage ≥ 90% post-reduction
+            Manager->>Manager: Layer 4: Escalation passes
         end
 
-        Manager-->>Agent: Reduced
+        Manager-->>Agent: Context reduced in-place
     end
 
-    Agent->>Agent: Continue
+    Agent->>Agent: Proceed with model invocation
 ```
 
-## System Components
-
-The context management system consists of coordinated components operating at different stages:
+## Component Specification
 
 ### ToolRouterHook
-Routes tool invocations and manages output sizes before they enter conversation history. Handles truncation and artifact externalization.
 
-**Location**: `modules/handlers/tool_router.py`
+Intercepts tool execution events to manage output sizes before conversation integration.
+
+| Attribute | Value |
+|-----------|-------|
+| **Location** | `modules/handlers/tool_router.py` |
+| **SDK Events** | `BeforeToolCallEvent`, `AfterToolCallEvent` |
+| **Truncation Threshold** | 30,000 characters |
+| **Artifact Threshold** | 10,000 characters |
+| **Artifact Retention** | 100 most recent per session |
+
+**Responsibilities**:
+- Route unregistered tool invocations to shell executor
+- Truncate oversized tool outputs with size metadata
+- Externalize large outputs to timestamped artifact files
+- Inject inline preview (4KB head) for immediate LLM context
 
 ### PromptBudgetHook
-Monitors token usage before each LLM invocation and triggers reduction when approaching limits. Includes comprehensive diagnostic logging and telemetry fallback for operational reliability.
 
-**Location**: `modules/handlers/conversation_budget.py`
-**Events**: Subscribes to `BeforeModelCallEvent` and `AfterModelCallEvent` from Strands SDK
-**Diagnostics**: INFO-level logging for budget checks, token estimation status, and threshold triggers
+Enforces token budget constraints through proactive monitoring and reactive reduction.
+
+| Attribute | Value |
+|-----------|-------|
+| **Location** | `modules/handlers/conversation_budget.py` |
+| **SDK Events** | `BeforeModelCallEvent`, `AfterModelCallEvent` |
+| **Reduction Threshold** | 65% of context limit |
+| **Escalation Threshold** | 90% of context limit |
+| **Warning Threshold** | 80% (no reductions recorded) |
+
+**Execution Sequence**:
+1. Strip `reasoningContent` blocks for non-reasoning models
+2. Invoke `conversation_manager.apply_management(agent)` proactively
+3. Execute `_ensure_prompt_within_budget(agent)` for threshold enforcement
+4. Clean up transient attributes post-invocation
 
 ### MappingConversationManager
-Orchestrates multi-layer reduction strategies, applying the appropriate technique based on conversation state. The main agent's conversation manager is registered as a shared singleton, enabling swarm agents and specialist sub-agents to use the same context management without explicit configuration.
 
-**Location**: `modules/handlers/conversation_budget.py`
-**Pattern**: Singleton shared across main agent, swarm agents, and specialist tools
-**Optimization**: Automatically returns early for very small conversations (<3 messages) to prevent spurious warnings during specialist tool invocations. Small conversations (3-5 messages) use DEBUG-level logging to reduce log noise.
+Implements the Strands SDK `ConversationManager` interface with multi-layer reduction strategies.
+
+| Attribute | Value |
+|-----------|-------|
+| **Location** | `modules/handlers/conversation_budget.py` |
+| **Base Class** | `SummarizingConversationManager` |
+| **Pattern** | Shared singleton across agent hierarchy |
+| **SDK Contract** | In-place modification via `agent.messages[:] = new` |
+
+**Interface Methods**:
+
+```python
+def apply_management(self, agent: Agent, **kwargs) -> None:
+    """Proactive context management after each event loop cycle."""
+
+def reduce_context(self, agent: Agent, e: Optional[Exception] = None, **kwargs) -> None:
+    """Reactive context reduction on overflow or threshold breach."""
+
+def get_state(self) -> dict[str, Any]:
+    """Serialize manager state for session persistence."""
+
+def restore_from_session(self, state: dict[str, Any]) -> Optional[list[Message]]:
+    """Restore state and optionally return messages to prepend."""
+```
 
 ### LargeToolResultMapper
-Compresses individual tool results within messages while preserving metadata and samples.
 
-**Location**: `modules/handlers/conversation_budget.py`
+Stateless message mapper implementing the SDK `MessageMapper` protocol for tool result compression.
 
-### Memory System
-Stores findings and evidence in vector database for cross-session retrieval.
+| Attribute | Value |
+|-----------|-------|
+| **Location** | `modules/handlers/conversation_budget.py` |
+| **Compression Threshold** | 40,000 characters |
+| **Truncation Target** | 8,000 characters |
+| **Sample Limit** | 3 key-value pairs for JSON |
 
-**Location**: `modules/tools/memory.py`
+**Compression Metadata Structure**:
+```python
+@dataclass
+class CompressionMetadata:
+    compressed: bool
+    original_size: int
+    compressed_size: int
+    compression_ratio: float
+    content_type: str  # "text", "json", "mixed"
+    n_original_keys: Optional[int]
+    sample_data: Optional[dict]
+```
 
-### Artifacts Storage
-Persists full tool outputs to disk at `outputs/<target>/<operation>/artifacts/`
+## Token Estimation Model
 
-## How Context Management Works
+### Overhead Constants
 
-### Context Management Approaches
+Token estimation must account for content not present in `agent.messages`:
 
-| Approach | How It Works | Best For |
-|----------|--------------|----------|
-| **Sliding Window** | Removes oldest messages | Simple trimming |
-| **Summarization** | Condenses multiple messages via LLM | Historical narrative |
-| **Pruning** | Compresses large individual messages | Tool result management |
-| **Artifact Externalization** | Stores full content to disk | Large outputs |
-| **Multi-Layer** | Combines all approaches sequentially | Long security operations |
+| Component | Token Overhead | Rationale |
+|-----------|---------------|-----------|
+| System Prompt | 8,000 tokens | Execution prompts, tool guides, phase context |
+| Tool Definitions | 3,000 tokens | JSON schema for registered tools |
+| Message Metadata | 50 tokens/message | Role markers, structural tokens |
 
-## Token Budget Monitoring
+**Estimation Formula**:
+```
+total_tokens = SYSTEM_OVERHEAD + TOOL_OVERHEAD + (N × MESSAGE_OVERHEAD) + (chars / ratio)
+             = 8000 + 3000 + (N × 50) + (total_chars / char_token_ratio)
+```
 
-The system uses estimation-based tracking to monitor conversation size and trigger reductions when needed.
+### Model-Specific Character-to-Token Ratios
 
-### Token Estimation (Threshold Decisions)
+Different tokenizers exhibit varying compression characteristics:
 
-Token estimation calculates total conversation size by analyzing all message content. This provides accurate counts for threshold decisions (when to trigger reduction) by measuring actual conversation state.
+| Model Family | Provider | Ratio | Tokenizer |
+|--------------|----------|-------|-----------|
+| Claude | Anthropic, Bedrock | 3.7 | Claude tokenizer |
+| GPT-4/5 | OpenAI, Azure | 4.0 | tiktoken (cl100k) |
+| Kimi K2 | Moonshot | 3.8 | Custom BPE |
+| Gemini | Google, Vertex | 4.2 | SentencePiece |
+| Default | Other | 3.7 | Conservative estimate |
 
-**Usage**: Threshold decisions (should reduction trigger?)
-**Method**: Comprehensive content analysis with dynamic model-aware character-to-token ratios
-**Triggers**: Below 80% (continue), at 80% (reduce), at 90% (escalate)
+Ratios are resolved dynamically via models.dev integration with result caching.
 
-**Dynamic Ratios**: The system automatically selects the appropriate ratio based on model provider (Claude 3.7, GPT 4.0, Kimi 3.8, Gemini 4.2, others 3.7), improving estimation accuracy to ±1%.
+### Proactive vs Reactive Thresholds
 
-**Diagnostic Logging**: The system logs detailed information when estimation fails:
-- `TOKEN ESTIMATION FAILED: agent.messages is None` - Messages not initialized
-- `TOKEN ESTIMATION FAILED: agent.messages is not a list` - Wrong message type
-- `TOKEN ESTIMATION: agent.messages is empty, returning 0 tokens` - Valid empty state
-- `TOKEN ESTIMATION ERROR: Exception during estimation` - Estimation exception with traceback
-
-**Fallback Mechanism**: If token estimation fails, the system automatically falls back to using SDK telemetry as a proxy for context size, ensuring budget enforcement continues even when estimation encounters errors.
-
-### SDK Telemetry (Diagnostics and Fallback)
-
-SDK telemetry tracks per-turn token usage for diagnostic purposes. Telemetry data is logged alongside estimation for monitoring and debugging, but threshold decisions rely on estimation to ensure accurate total conversation size measurement.
-
-**Usage**: Diagnostic logging, monitoring, and fallback
-**Purpose**: Validates estimation accuracy, tracks token growth patterns, and provides fallback when estimation fails
-
-**Fallback Behavior**: When estimation returns None, telemetry is used as a proxy:
-- `BUDGET CHECK FALLBACK: Using telemetry tokens (X) as proxy for context size`
-- If both estimation and telemetry fail: `BUDGET CHECK ABORT: No estimation and no telemetry available`
-
-### Configuration
-
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `CYBER_PROMPT_FALLBACK_TOKENS` | 200,000 | **(Optional)** Token limit when provider limit unavailable. With models.dev integration, limits are auto-detected for 500+ models. |
-| `CYBER_PROMPT_TELEMETRY_THRESHOLD` | 0.8 | Percentage triggering proactive reduction |
-
-**Automatic Limit Detection**: The system integrates with models.dev to automatically detect token limits for 500+ models across 58 providers. Safe max_tokens for swarm agents are calculated as 50% of the model's output limit.
+| Threshold | Percentage | Trigger |
+|-----------|------------|---------|
+| Proactive Compression | 70% of window size | `apply_management()` |
+| Budget Reduction | 65% of token limit | `_ensure_prompt_within_budget()` |
+| Warning (no reductions) | 80% of token limit | Diagnostic logging |
+| Escalation | 90% of token limit | Additional reduction passes |
+| Maximum | 98% of token limit | Hard ceiling |
 
 ## Multi-Layer Reduction System
 
-### Layer 1: Message Pruning
+### Layer 1: Tool Result Compression
 
-Selectively compresses large tool results within individual messages while preserving message structure and conversation flow.
+Selectively compresses tool results exceeding the compression threshold while preserving semantic content.
 
 **Trigger Conditions**:
-- Tool result content exceeds compression threshold (default: 185,000 characters)
-- Message falls within prunable range (excludes preserved initial and recent messages)
+- Tool result content exceeds 40,000 characters
+- Message resides within the prunable range (excludes preservation zones)
 
-**Pruning Operations**:
+**Compression Operations**:
 
-**Text Content**: Long text truncated to configured limit with clear indicators.
+| Content Type | Strategy | Output |
+|--------------|----------|--------|
+| Text | Head truncation | First 8,000 chars + size indicator |
+| JSON Object | Key sampling | First 3 keys (100 char values) + metadata |
+| JSON Array | Element sampling | First 3 elements + length indicator |
 
-**JSON Content**: Extracts metadata and samples while discarding bulk data. Preserves first few key-value pairs (with 100-character value limit), records original size and key count, includes compression ratio.
+**Preservation Zones**:
+- **Initial Zone**: First N messages (`preserve_first`, default: 1)
+- **Recent Zone**: Last M messages (`preserve_last`, dynamically scaled)
+- **Prunable Range**: Messages between zones eligible for compression
 
-**Message Processing**: Uses deep copy to prevent aliasing bugs when modifying nested message structures. This ensures the original conversation history remains unmodified during compression.
-
-**Preservation Zones**: Initial messages (system prompt), recent messages (current context), and prunable range (middle messages eligible for compression).
-
-**Output Characteristics**: Maintains tool execution metadata with clear compression indicators and sample data for LLM comprehension.
+**Dynamic Preservation Scaling**:
+```python
+preserve_last = max(8, int(window_size * 0.15))  # 15% of window, minimum 8
+total_preserved = min(preserve_first + preserve_last, int(window_size * 0.5))  # Cap at 50%
+```
 
 ### Layer 2: Sliding Window
 
-Maintains fixed conversation window by removing oldest messages while preserving critical context.
+Maintains bounded conversation length by removing oldest messages while preserving tool execution pairs.
+
+**Configuration**:
+- Window size: 100 messages (configurable via `CYBER_CONVERSATION_WINDOW`)
+- Tool pair preservation: Delegated to SDK's `SlidingWindowConversationManager`
+
+**Tool Pair Constraint**:
+The SDK enforces that `toolUse` blocks are never orphaned from their corresponding `toolResult`:
+```
+Cannot remove: toolResult without preceding toolUse
+Cannot remove: toolUse without following toolResult (unless terminal)
+```
+
+### Layer 3: LLM Summarization
+
+Condenses historical conversation segments via model-based summarization when sliding window reduction is insufficient.
 
 **Trigger Conditions**:
-- Token usage exceeds threshold after Layer 1 pruning
-- Invoked by conversation manager when needed
+- `ContextWindowOverflowException` raised by Layer 2
+- Conversation exceeds model limits after window application
 
-**Window Configuration**: Configurable via `CYBER_CONVERSATION_WINDOW` (default: 100 messages) with 1 initial and 12 recent messages preserved.
-
-**Behavior**: Maintains system prompt and recent exchanges while removing middle messages oldest-first. Logs all message count changes. Conversations with fewer than 3 messages skip pruning entirely.
-
-### Layer 3: Summarization
-
-Condenses older conversation segments when sliding window proves insufficient.
-
-**Trigger Conditions**:
-- Context window overflow exception raised by Layer 2
-- Conversation still exceeds model limits after sliding window
-
-**Summarization Approach**: Targets oldest 30% of messages for LLM-based summarization while preserving recent messages verbatim. Summary includes critical findings, decisions, tool executions, and assessment progress.
+**Summarization Parameters**:
+- Target ratio: 30% of conversation (oldest messages)
+- Preservation: Recent messages retained verbatim
+- Output: Single summary message prepended to reduced conversation
 
 ### Layer 4: Escalation
 
-Final aggressive reduction when previous layers prove insufficient.
+Emergency reduction protocol when preceding layers fail to achieve target capacity.
 
-**Trigger Conditions**: Token usage at or above 90% after initial reduction. Up to 2 additional passes with 30-second total time budget.
+**Escalation Parameters**:
+- Maximum passes: 2 additional reduction cycles
+- Time budget: 30 seconds total
+- Target threshold: Below 90% of token limit
 
-**Behavior**: Repeats reduction cycle with increased aggression, monitoring timing and logging progression. Terminates when tokens fall below 90%, passes complete, or time budget exceeded.
-
-## Prompt Caching (LiteLLM / Anthropic)
-
-Prompt caching reduces repeated input-token charges and latency for stable parts of the system prompt by letting the provider cache previously-seen prompt segments.
-
-- How: The agent now constructs the system prompt as SystemContentBlock[] with a cachePoint hint. Providers that support caching (e.g., Anthropic via LiteLLM) can reuse cached segments across turns; others safely ignore the hint.
-- Where: Applied automatically when the provider is bedrock or litellm. For all other providers, the agent falls back to the plain string prompt.
-- What’s cached: Minimal segmentation is used initially — the composed system prompt is emitted as a single text block followed by a default cachePoint. This is safe and yields benefits when the prompt remains stable across turns.
-- Backward compatibility: Legacy tests and code paths continue to see a string system prompt; unsupported providers behave unchanged.
-
-Example structure of the prompt payload:
-
-```json path=null start=null
-[
-  { "text": "<full composed system prompt>" },
-  { "cachePoint": { "type": "default" } }
-]
-```
-
-Notes and limitations:
-- Only stable sections benefit; if the system prompt changes frequently, providers will write new cache entries instead of reading.
-- Some providers expose cacheWrite/cacheRead usage in billing/telemetry; we do not surface these counters in the UI yet.
-- No environment variables are required; this behavior is on by default and harmless when unsupported.
+**Termination Conditions**:
+1. Token usage falls below 90% threshold
+2. Maximum passes exhausted
+3. Time budget exceeded
 
 ## Artifact Externalization
 
-### Processing Flow
-
-Large tool outputs exceeding threshold are saved to disk. The conversation receives a compact summary with the artifact file path and an inline preview of the first 4KB for immediate context.
-
-### Storage Organization
+### Storage Hierarchy
 
 ```
 outputs/<target>/<operation>/
 ├── artifacts/
-│   ├── sqlmap_<timestamp>_<hash>.log
-│   ├── scope_reconftw_<timestamp>.txt
-│   └── crawl_gospider_<timestamp>.json
+│   ├── <tool>_<timestamp>_<uuid>.log
+│   ├── <tool>_<timestamp>_<uuid>.log
+│   └── ...
 ├── logs/
 │   └── cyber_operations.log
 └── report.md
 ```
 
-Artifacts are organized by operation for isolation and evidence collection.
+### Artifact Lifecycle
 
-### Size Thresholds
+| Phase | Action |
+|-------|--------|
+| Creation | Atomic write with UUID collision retry |
+| Naming | `{tool_name}_{YYYYMMDD_HHMMSS}_{uuid6}.log` |
+| Cleanup | Retain 100 most recent, remove on threshold (150) |
+| Reference | Relative path injected into conversation |
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `CYBER_TOOL_MAX_RESULT_CHARS` | 30,000 | Conversation truncation limit |
-| `CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD` | 50,000 | Artifact externalization threshold |
+### Inline Preview
 
-## Execution Flow
+Artifact references include immediate context for LLM comprehension:
+```
+[Tool output: 125,432 chars total | Preview: 25,000 chars below | Full: artifacts/nmap_20241124_143022_a1b2c3.log]
 
-Context management operates through two primary hooks:
+<first 25,000 characters>
 
-**ToolRouterHook**: Processes tool outputs before conversation entry. Large outputs are externalized to artifacts, conversation receives compact summaries.
+[Artifact head - 4000 chars:]
+<artifact preview>
 
-**PromptBudgetHook**: Monitors token usage before each LLM invocation. When usage exceeds 80% threshold, triggers appropriate reduction layers sequentially until tokens fall below limit.
+[Complete output saved to: artifacts/nmap_20241124_143022_a1b2c3.log]
+```
 
 ## Configuration Reference
 
-### Essential Settings
+### Environment Variables
 
-Token budget controls:
-```bash
-# Optional (auto-detected from models.dev for 500+ models)
-CYBER_PROMPT_FALLBACK_TOKENS=200000
+#### Token Budget Controls
 
-# Reduction threshold (0.8 = 80%)
-CYBER_PROMPT_TELEMETRY_THRESHOLD=0.8
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYBER_CONTEXT_LIMIT` | 200,000 | Maximum context window size in tokens. Used when provider-specific limits are unavailable. |
+| `CYBER_PROMPT_TELEMETRY_THRESHOLD` | 0.65 | Reduction trigger threshold (65%) |
+| `CYBER_PROMPT_CACHE_RELAX` | 0.1 | Threshold relaxation when prompt caching active |
 
-# Optional: Override safe max_tokens for swarm agents (default: 50% of model output limit)
-CYBER_AGENT_SWARM_MAX_TOKENS=8192
+Note: `CYBER_PROMPT_FALLBACK_TOKENS` is deprecated but still supported for backward compatibility.
+
+#### Tool Result Handling
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYBER_TOOL_COMPRESS_TRUNCATE` | 8,000 | Compression target size (characters) |
+| `CYBER_TOOL_MAX_RESULT_CHARS` | 30,000 | Conversation truncation limit |
+| `CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD` | 10,000 | Artifact externalization trigger |
+
+Note: `TOOL_COMPRESS_THRESHOLD` is an internal constant (40K) derived as 4x the artifact threshold. This ensures the compression layer acts as a safety net for results that bypass externalization.
+
+#### Conversation Preservation
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CYBER_CONVERSATION_WINDOW` | 100 | Sliding window size (messages) |
+| `CYBER_CONVERSATION_PRESERVE_FIRST` | 1 | Initial messages to preserve |
+| `CYBER_CONVERSATION_PRESERVE_LAST` | 12 | Recent messages to preserve (overridden by dynamic scaling) |
+
+### Code-Level Constants
+
+```python
+# Token estimation overhead
+SYSTEM_PROMPT_OVERHEAD_TOKENS = 8000
+TOOL_DEFINITIONS_OVERHEAD_TOKENS = 3000
+MESSAGE_METADATA_OVERHEAD_TOKENS = 50
+
+# Reduction thresholds
+PROACTIVE_COMPRESSION_THRESHOLD = 0.7   # 70% of window triggers proactive compression
+ESCALATION_THRESHOLD_RATIO = 0.9        # 90% triggers escalation
+MAX_THRESHOLD_RATIO = 0.98              # Hard ceiling
+
+# Escalation parameters
+ESCALATION_MAX_PASSES = 2
+ESCALATION_MAX_TIME_SECONDS = 30.0
+
+# Conversation analysis
+SMALL_CONVERSATION_THRESHOLD = 3        # Skip pruning below this count
+DEFAULT_CHAR_TO_TOKEN_RATIO = 3.7       # Conservative default
 ```
 
-Tool result handling:
-```bash
-CYBER_TOOL_COMPRESS_THRESHOLD=185000
-CYBER_TOOL_MAX_RESULT_CHARS=30000
-CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD=50000
+## Prompt Caching Integration
+
+### Mechanism
+
+The system constructs prompts as `SystemContentBlock[]` with cache point hints for providers supporting prompt caching (Anthropic via LiteLLM, Bedrock):
+
+```json
+[
+  {"text": "<composed system prompt>"},
+  {"cachePoint": {"type": "default"}}
+]
 ```
 
-Conversation preservation:
+### Provider Behavior
+
+| Provider | Caching Support | Fallback |
+|----------|-----------------|----------|
+| Bedrock | Supported | N/A |
+| LiteLLM (Anthropic) | Supported | N/A |
+| Other | Ignored | Plain string prompt |
+
+### Threshold Relaxation
+
+When prompt caching is active (`_prompt_cache_hit` or `CYBER_PROMPT_CACHE_HINT=true`), the reduction threshold is relaxed by `PROMPT_CACHE_RELAX` (default: 10%) to avoid premature reductions that would invalidate cache entries.
+
+## Diagnostic Framework
+
+### Log Messages
+
+| Pattern | Level | Indicates |
+|---------|-------|-----------|
+| `TOKEN ESTIMATION FAILED: agent.messages is None` | WARNING | Messages not initialized |
+| `TOKEN ESTIMATION FAILED: agent.messages is not a list` | WARNING | Invalid message type |
+| `TOKEN ESTIMATION: agent.messages is empty` | INFO | Valid empty state |
+| `TOKEN ESTIMATION ERROR: Exception during estimation` | ERROR | Estimation failure with traceback |
+| `BUDGET CHECK FALLBACK: Using telemetry tokens` | INFO | Estimation failed, using telemetry proxy |
+| `BUDGET CHECK ABORT: No estimation and no telemetry` | ERROR | Complete budget enforcement failure |
+| `THRESHOLD EXCEEDED: context=X, threshold=Y` | WARNING | Reduction triggered |
+| `LAYER 2 COMPRESSION: Compressing N tool result(s)` | INFO | Compression applied |
+| `Context reduced via X manager: messages A->B` | INFO | Reduction complete |
+
+### Fallback Behavior
+
+When token estimation fails, the system degrades gracefully:
+
+1. **Primary**: Character-based estimation with model-specific ratios
+2. **Secondary**: SDK telemetry (`event_loop_metrics.accumulated_usage.inputTokens`)
+3. **Tertiary**: Operation continues without budget enforcement (logged as ERROR)
+
+## Operational Characteristics
+
+### Performance Bounds
+
+| Operation | Complexity | Typical Latency |
+|-----------|------------|-----------------|
+| Token estimation | O(n) messages | < 10ms |
+| Layer 1 compression | O(n) content blocks | < 50ms |
+| Layer 2 sliding window | O(1) slice | < 1ms |
+| Layer 3 summarization | O(tokens) LLM call | 2-10s |
+| Layer 4 escalation | O(passes × layers) | ≤ 30s |
+
+### Memory Considerations
+
+- Message modification occurs in-place (`agent.messages[:] = new`)
+- Deep copy used only for compression to prevent aliasing
+- Artifact cleanup prevents unbounded disk growth
+- Reduction history capped at 5 events per agent
+
+## Troubleshooting
+
+### Symptoms and Resolutions
+
+| Symptom | Likely Cause | Resolution |
+|---------|--------------|------------|
+| Tokens grow unbounded | Estimation failure | Check for `TOKEN ESTIMATION FAILED` logs; verify `CYBER_CONTEXT_LIMIT` |
+| Reductions ineffective | Preservation overlap | Reduce `CYBER_CONVERSATION_PRESERVE_LAST`; verify prunable range exists |
+| Budget checks not firing | Hook registration failure | Verify `HOOK REGISTRATION: PromptBudgetHook` in logs |
+| Layer 2 never triggers | Artifact threshold too low | Verify `CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD` (default: 10,000); compression is 4x this value |
+| Excessive log volume | LiteLLM DEBUG logging | Verify `logger.py` silences LiteLLM at WARNING level |
+
+### Validation Commands
+
 ```bash
-CYBER_CONVERSATION_PRESERVE_FIRST=1
-CYBER_CONVERSATION_PRESERVE_LAST=12
+# Verify token estimation
+grep "TOKEN ESTIMATION" logs/cyber_operations.log | tail -20
+
+# Check reduction activity
+grep "Context reduced" logs/cyber_operations.log | wc -l
+
+# Monitor compression triggers
+grep "LAYER 2 COMPRESSION" logs/cyber_operations.log
+
+# Verify hook registration
+grep "HOOK REGISTRATION" logs/cyber_operations.log
 ```
 
-### Advanced Tuning
+## References
 
-Compression parameters:
-```bash
-CYBER_TOOL_COMPRESS_TRUNCATE=18500
-```
-
-Conversation manager settings:
-```bash
-# Sliding window size (default: 100)
-CYBER_CONVERSATION_WINDOW=100
-
-# Messages to preserve at start/end (defaults)
-CYBER_CONVERSATION_PRESERVE_FIRST=1
-CYBER_CONVERSATION_PRESERVE_LAST=12
-```
-
-Code-level settings:
-- `window_size` - From `CYBER_CONVERSATION_WINDOW` (default: 100)
-- `summary_ratio=0.3` - Percentage summarized in Layer 3
-
-
-### Threshold Tuning
-
-**Conservative (0.8-0.9)**: Minimal reductions, maximum context retention
-**Balanced (0.6-0.7)**: Proactive management for general operations
-**Aggressive (0.4-0.5)**: Frequent reductions for resource-constrained environments
-
-### Common Issues
-
-**No budget enforcement (tokens grow unbounded):**
-- Check for `TOKEN ESTIMATION FAILED` logs to identify estimation issues
-- Look for `BUDGET CHECK ABORT` indicating complete failure
-- Verify `CYBER_PROMPT_FALLBACK_TOKENS` is set
-
-**Reductions not effective:**
-- Check `PRESERVE_LAST` value - should be 12 or less for pruning to work
-- Verify prunable range: `(preserve_first + preserve_last) < total_messages`
-- Look for `Cannot prune: preservation ranges cover all X messages` warning
-
-**Budget checks not firing:**
-- Verify hooks registered: `HOOK REGISTRATION: PromptBudgetHook callbacks registered`
-- Check for `HOOK EVENT: BeforeModelCallEvent fired` logs
-- Ensure log level is INFO or DEBUG for diagnostic visibility
-
-## Summary
-
-Context management enables multi-hour penetration testing operations through four reduction layers applied sequentially as needed. The system monitors token usage continuously and triggers appropriate strategies to stay within model limits.
-
-The system includes comprehensive diagnostics and fallback mechanisms to ensure budget enforcement continues even when token estimation encounters errors. All budget checks, threshold triggers, and reductions are logged at INFO level for operational visibility.
-
-Artifact externalization preserves complete evidence on disk while conversation maintains compact summaries and recent context. Operations continue reliably across model providers while preserving evidence chains for final reporting.
+- Strands SDK: `ConversationManager` interface specification
+- Strands SDK: `MessageMapper` protocol (stateless transformation)
+- Strands SDK: Hook events (`BeforeModelCallEvent`, `AfterToolCallEvent`)
+- models.dev: Provider-specific token limits and ratios

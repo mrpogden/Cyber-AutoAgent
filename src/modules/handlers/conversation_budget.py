@@ -152,15 +152,47 @@ def _get_env_float(name: str, default: float) -> float:
 
 
 # Named constants for prompt budget configuration
-PROMPT_TOKEN_FALLBACK_LIMIT = _get_env_int("CYBER_PROMPT_FALLBACK_TOKENS", 200000)
+# CYBER_CONTEXT_LIMIT is the preferred name; CYBER_PROMPT_FALLBACK_TOKENS is legacy (deprecated)
+def _get_context_limit() -> int:
+    """Get context limit, preferring new name over legacy."""
+    new_val = os.getenv("CYBER_CONTEXT_LIMIT")
+    if new_val:
+        try:
+            return int(new_val)
+        except ValueError:
+            pass
+    legacy_val = os.getenv("CYBER_PROMPT_FALLBACK_TOKENS")
+    if legacy_val:
+        try:
+            return int(legacy_val)
+        except ValueError:
+            pass
+    return 200000  # Default
+
+CONTEXT_LIMIT = _get_context_limit()
+# Legacy alias for backward compatibility
+PROMPT_TOKEN_FALLBACK_LIMIT = CONTEXT_LIMIT
 PROMPT_TELEMETRY_THRESHOLD = max(
     0.1, min(_get_env_float("CYBER_PROMPT_TELEMETRY_THRESHOLD", 0.65), 0.95)
 )
 PROMPT_CACHE_RELAX = max(0.0, min(_get_env_float("CYBER_PROMPT_CACHE_RELAX", 0.1), 0.3))
 NO_REDUCTION_WARNING_RATIO = 0.8  # Warn when at 80% of limit with no reductions
-# Compression threshold aligned with Strands SDK (185K chars ≈ 50K tokens)
-TOOL_COMPRESS_THRESHOLD = _get_env_int("CYBER_TOOL_COMPRESS_THRESHOLD", 185000)
-TOOL_COMPRESS_TRUNCATE = _get_env_int("CYBER_TOOL_COMPRESS_TRUNCATE", 18500)
+
+# Compression threshold for large tool results - INTERNAL constant
+# This is a safety net for results that bypass ToolRouterHook externalization (10K).
+# Set to 4x the externalization threshold to only catch edge cases.
+# NOT user-configurable - the relationship with externalization threshold must be maintained.
+_TOOL_ARTIFACT_THRESHOLD = 10000  # Must match ToolRouterHook default
+TOOL_COMPRESS_THRESHOLD = _TOOL_ARTIFACT_THRESHOLD * 4  # 40K - safety net only
+TOOL_COMPRESS_TRUNCATE = _get_env_int("CYBER_TOOL_COMPRESS_TRUNCATE", 8000)
+
+# Token estimation overhead constants for content not in agent.messages
+SYSTEM_PROMPT_OVERHEAD_TOKENS = 8000
+TOOL_DEFINITIONS_OVERHEAD_TOKENS = 3000
+MESSAGE_METADATA_OVERHEAD_TOKENS = 50
+
+# Proactive compression threshold (percentage of window capacity)
+PROACTIVE_COMPRESSION_THRESHOLD = 0.7
 PRESERVE_FIRST_DEFAULT = _get_env_int("CYBER_CONVERSATION_PRESERVE_FIRST", 1)
 PRESERVE_LAST_DEFAULT = _get_env_int("CYBER_CONVERSATION_PRESERVE_LAST", 12)
 _MAX_REDUCTION_HISTORY = 5  # Keep last 5 reduction events for diagnostics
@@ -235,7 +267,7 @@ class LargeToolResultMapper:
     Compress overly large tool results before they hit the conversation.
 
     Uses structured compression indicators and rich message context for intelligent
-    pruning decisions.
+    pruning decisions. Stateless per the Strands SDK MessageMapper protocol.
     """
 
     def __init__(
@@ -247,10 +279,6 @@ class LargeToolResultMapper:
         self.max_tool_chars = max_tool_chars
         self.truncate_at = truncate_at
         self.sample_limit = sample_limit
-        # Cache for JSON string lengths to avoid redundant serialization
-        # Key format: (message_index, block_index) tuple to prevent collisions
-        # Using tuple keys ensures unique cache entries across different messages/blocks
-        self._json_cache: dict[tuple[int, int], tuple[str, int]] = {}
 
     def _create_message_context(
         self, message: Message, index: int, messages: list[Message]
@@ -404,43 +432,13 @@ class LargeToolResultMapper:
         return new_message
 
     def _tool_length(self, tool_result: dict[str, Any], cache_key: int = 0) -> int:
-        """Calculate tool result length with JSON caching.
-
-        Uses tuple-based cache keys (cache_key, block_idx) to prevent
-        collisions between different messages/blocks.
-        """
+        """Calculate total character length of tool result content."""
         length = 0
-        for block_idx, block in enumerate(tool_result.get("content", [])):
+        for block in tool_result.get("content", []):
             if "text" in block:
                 length += len(block["text"])
             elif "json" in block:
-                # Use tuple-based cache key to prevent collisions
-                json_cache_key = (cache_key, block_idx)
-                if json_cache_key in self._json_cache:
-                    _, cached_len = self._json_cache[json_cache_key]
-                    length += cached_len
-                else:
-                    json_str = str(block["json"])
-                    json_len = len(json_str)
-                    # Cache for potential reuse in _compress
-                    self._json_cache[json_cache_key] = (json_str, json_len)
-                    length += json_len
-
-                    # Use LRU-style eviction for cache cleanup
-                    if len(self._json_cache) > JSON_CACHE_MAX_SIZE:
-                        # Sort by key (message_index, block_index) to keep most recent
-                        # This assumes higher indices = more recent messages
-                        sorted_keys = sorted(self._json_cache.keys(), reverse=True)
-                        # Keep the most recent entries
-                        keys_to_keep = set(sorted_keys[:JSON_CACHE_KEEP_SIZE])
-                        self._json_cache = {
-                            k: v for k, v in self._json_cache.items() if k in keys_to_keep
-                        }
-                        logger.debug(
-                            "Cleaned JSON cache, kept %d most recent entries",
-                            len(self._json_cache)
-                        )
-
+                length += len(str(block["json"]))
         return length
 
     def _tool_use_length(self, tool_use: dict[str, Any]) -> int:
@@ -495,14 +493,8 @@ class LargeToolResultMapper:
             elif "json" in block:
                 content_types.append("json")
                 json_data = block["json"]
-
-                # Try to use cached JSON string (tuple-based key)
-                json_cache_key = (cache_key, block_idx)
-                if json_cache_key in self._json_cache:
-                    payload, payload_len = self._json_cache[json_cache_key]
-                else:
-                    payload = str(json_data)
-                    payload_len = len(payload)
+                payload = str(json_data)
+                payload_len = len(payload)
 
                 if payload_len > self.truncate_at:
                     # Create structured compression metadata
@@ -650,34 +642,50 @@ class LargeToolResultMapper:
 
 
 class MappingConversationManager(SummarizingConversationManager):
-    """Sliding window trimming with summarization fallback and tool compression."""
+    """Sliding window trimming with summarization fallback and tool compression.
+
+    Follows Strands SDK ConversationManager contract:
+    - apply_management(): Proactive compression + sliding window
+    - reduce_context(): Reactive cascade: mapper → slide → summarize
+    - Messages modified in-place: agent.messages[:] = new
+    """
 
     def __init__(
         self,
         *,
         window_size: int = 30,
         summary_ratio: float = 0.3,
-        preserve_recent_messages: int = PRESERVE_LAST_DEFAULT,
+        preserve_recent_messages: Optional[int] = None,
         preserve_first_messages: int = PRESERVE_FIRST_DEFAULT,
         tool_result_mapper: Optional[LargeToolResultMapper] = None,
     ) -> None:
-        # Validate preservation ranges to prevent overlap and window size parameters
         if window_size < 1:
             logger.warning("Invalid window_size %d, using minimum 1", window_size)
             window_size = 1
         if preserve_first_messages < 0:
             logger.warning("Invalid preserve_first_messages %d, using 0", preserve_first_messages)
             preserve_first_messages = 0
-        if preserve_recent_messages < 0:
+
+        # Scale preserve_last dynamically with window size (15%, min 8)
+        if preserve_recent_messages is None:
+            preserve_recent_messages = max(8, int(window_size * 0.15))
+            logger.info(
+                "Auto-scaled preserve_last to %d (15%% of window_size=%d)",
+                preserve_recent_messages, window_size
+            )
+        elif preserve_recent_messages < 0:
             logger.warning("Invalid preserve_recent_messages %d, using 0", preserve_recent_messages)
             preserve_recent_messages = 0
-        # Warn if preservation ranges might cause issues
-        if preserve_first_messages + preserve_recent_messages > window_size:
+
+        # Validate total preservation doesn't exceed 50% of window
+        total_preserved = preserve_first_messages + preserve_recent_messages
+        max_preserved = int(window_size * 0.5)
+        if total_preserved > max_preserved:
+            old_preserve_last = preserve_recent_messages
+            preserve_recent_messages = max(0, max_preserved - preserve_first_messages)
             logger.warning(
-                "Preservation ranges (first=%d + last=%d = %d) exceed window_size=%d. "
-                "This may prevent effective pruning.",
-                preserve_first_messages, preserve_recent_messages,
-                preserve_first_messages + preserve_recent_messages, window_size
+                "Reduced preserve_last from %d to %d (50%% max of window=%d)",
+                old_preserve_last, preserve_recent_messages, window_size
             )
 
         super().__init__(
@@ -692,15 +700,24 @@ class MappingConversationManager(SummarizingConversationManager):
         self.preserve_first = max(0, preserve_first_messages)
         self.preserve_last = max(0, preserve_recent_messages)
         self.removed_message_count = 0
+        self._window_size = window_size  # Store for proactive compression check
 
     def apply_management(self, agent: Agent, **kwargs: Any) -> None:
         """Apply mapper compression then sliding window trimming.
 
-        Layer 1: Compress large tool results in prunable range
-        Layer 2: Trim old messages via sliding window
-
-        SDK's SlidingWindow doesn't have a mapper, so no double-application risk.
+        Called after every event loop cycle for proactive management.
         """
+        messages = getattr(agent, "messages", [])
+        window_size = self._window_size
+
+        if len(messages) > window_size * PROACTIVE_COMPRESSION_THRESHOLD:
+            logger.info(
+                "Proactive compression: %d messages (%.0f%% of %d window)",
+                len(messages),
+                len(messages) / window_size * 100,
+                window_size
+            )
+
         self._apply_mapper(agent)
         self._sliding.apply_management(agent, **kwargs)
 
@@ -871,7 +888,8 @@ class MappingConversationManager(SummarizingConversationManager):
                 else:
                     new_messages.append(mapped)
 
-        agent.messages = new_messages
+        # In-place modification per SDK ConversationManager contract
+        agent.messages[:] = new_messages
 
         if compressions > 0:
             logger.info(
@@ -1070,19 +1088,15 @@ def _estimate_prompt_tokens(agent: Agent) -> int:
     """
     Estimate prompt tokens with model-aware character-to-token ratio.
 
-    Purpose: Used for measuring reduction impact (how much was reduced?)
-
-    Provides before/after snapshots to measure reduction effectiveness.
-    SDK telemetry cannot be used here because it provides cumulative totals
-    that don't reflect intermediate reduction impact within a single operation.
-
-    Includes text, toolUse, toolResult, image, and document content.
-    Uses dynamic character-to-token ratio based on model provider.
-
-    Note: We intentionally do NOT add extra weight for roles here to keep
-    estimation deterministic and aligned with tests.
+    Includes system overhead constants for content not in agent.messages:
+    system prompt, tool definitions, and per-message metadata.
     """
     messages = getattr(agent, "messages", [])
+
+    # Add fixed overhead for content not in agent.messages
+    total_tokens = SYSTEM_PROMPT_OVERHEAD_TOKENS + TOOL_DEFINITIONS_OVERHEAD_TOKENS
+    total_tokens += len(messages) * MESSAGE_METADATA_OVERHEAD_TOKENS
+
     total_chars = 0
 
     for message in messages:
@@ -1155,15 +1169,18 @@ def _estimate_prompt_tokens(agent: Agent) -> int:
 
     ratio = _get_char_to_token_ratio_dynamic(model_id)
 
-    # Safe division with validation
     if ratio <= 0:
         logger.warning("Invalid char/token ratio %.2f, using default %.1f", ratio, DEFAULT_CHAR_TO_TOKEN_RATIO)
         ratio = DEFAULT_CHAR_TO_TOKEN_RATIO
-    estimated_tokens = max(1, int(total_chars / ratio))
+
+    content_tokens = max(1, int(total_chars / ratio))
+    estimated_tokens = total_tokens + content_tokens
 
     logger.debug(
-        "TOKEN ESTIMATION: %d chars / %.1f ratio = %d tokens (model=%s)",
-        total_chars, ratio, estimated_tokens, model_id
+        "Token estimation: %d chars / %.1f ratio = %d content + %d overhead = %d total (model=%s)",
+        total_chars, ratio, content_tokens,
+        SYSTEM_PROMPT_OVERHEAD_TOKENS + TOOL_DEFINITIONS_OVERHEAD_TOKENS + len(messages) * MESSAGE_METADATA_OVERHEAD_TOKENS,
+        estimated_tokens, model_id
     )
 
     return estimated_tokens

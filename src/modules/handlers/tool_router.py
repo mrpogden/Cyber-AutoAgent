@@ -17,9 +17,8 @@ logger = logging.getLogger(__name__)
 class ToolRouterHook:
     """BeforeToolCall hook that maps unknown tool names to shell and truncates large results."""
 
-    # Constants for artifact cleanup to prevent unbounded disk usage
-    MAX_ARTIFACTS_PER_SESSION = 100  # Maximum number of artifacts to keep
-    ARTIFACT_CLEANUP_THRESHOLD = 150  # Clean up when we exceed this many artifacts
+    MAX_ARTIFACTS_PER_SESSION = 100
+    ARTIFACT_CLEANUP_THRESHOLD = 150
 
     def __init__(
         self,
@@ -36,13 +35,10 @@ class ToolRouterHook:
             self._artifact_dir = Path(artifacts_dir)
         else:
             self._artifact_dir = None
-        # Default artifact threshold to 10KB - externalize medium-to-large outputs to save context
         self._artifact_threshold = artifact_threshold or 10000
-        # Feature flag: inline the artifact head explicitly to improve rehydration without requiring a follow-up tool call
         self._inline_artifact_head = (
             str(os.getenv("CYBER_TOOL_INLINE_ARTIFACT_HEAD", "true")).lower() == "true"
         )
-        # Track artifact count for cleanup
         self._artifact_count = 0
 
     def register_hooks(self, registry) -> None:  # type: ignore[no-untyped-def]
@@ -52,8 +48,7 @@ class ToolRouterHook:
         registry.add_callback(AfterToolCallEvent, self._truncate_large_results_async)
 
     async def _on_before_tool_async(self, event) -> None:  # type: ignore[no-untyped-def]
-        """Add type safety for event attributes (async version)."""
-        # Validate event object
+        """Route unknown tools to shell executor."""
         if event is None:
             logger.warning("Received None event in _on_before_tool")
             return
@@ -62,7 +57,6 @@ class ToolRouterHook:
             return
 
         tool_use = getattr(event, "tool_use", {}) or {}
-        # Validate tool_use is a dict
         if not isinstance(tool_use, dict):
             logger.warning("Invalid tool_use type: %s", type(tool_use))
             return
@@ -119,8 +113,7 @@ class ToolRouterHook:
         tool_use["input"] = {"command": command}
 
     async def _truncate_large_results_async(self, event) -> None:
-        """Add type safety for event attributes."""
-        # Validate event object
+        """Truncate large tool results and externalize to artifacts."""
         if event is None:
             logger.warning("Received None event in _truncate_large_results")
             return
@@ -152,7 +145,6 @@ class ToolRouterHook:
                 len(text),
                 min(self._max_result_chars, len(text)),
             )
-            # Reserve space for artifact preview (4KB) + headers (~1KB)
             if artifact_path is not None:
                 preview_limit = max(100, self._max_result_chars - 5000)
             else:
@@ -177,7 +169,6 @@ class ToolRouterHook:
                     snippet,
                 ]
                 if artifact_preview:
-                    # Make the head explicit to aid LLM consumption even if it doesn't issue the follow-up tool call
                     if self._inline_artifact_head:
                         summary_lines.extend([
                             "",
