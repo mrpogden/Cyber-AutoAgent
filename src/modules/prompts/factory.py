@@ -406,22 +406,34 @@ def _plan_first_directive(has_existing_memories: bool) -> str:
 
     This centralizes wording so tests and UX remain stable.
     """
+    # Category guidance included in both branches to reinforce proper usage
+    # NOTE: category is REQUIRED - store will error if missing
+    category_guidance = (
+        'CATEGORY RULE: Exploit/vuln confirmed → category="finding" | '
+        'Recon/failed attempt → category="observation" | '
+        'WRONG category = empty report!\n'
+        'NOTE: category is REQUIRED - missing category will raise error. '
+        'Always specify metadata={"category": "finding"} or "observation"'
+    )
+
     if has_existing_memories:
         return dedent(
-            """
+            f"""
             **CRITICAL FIRST ACTION**: Load all memories with mem0_memory(action="list", user_id="cyber_agent")
             NEXT: Retrieve the active plan with mem0_memory(action="get_plan"); if none, create one via mem0_memory(action="store_plan") before other tools
+            {category_guidance}
             """
         ).strip()
     else:
         return dedent(
-            """
+            f"""
             Starting fresh assessment with no previous context
             Do NOT check memory on fresh operations (no retrieval of prior data)
-            CRITICAL FIRST ACTION: Create a strategic plan via mem0_memory(action="store_plan", content={...})
-            Format: content={objective, current_phase, total_phases, phases: [{id, title, status, criteria}]}
+            CRITICAL FIRST ACTION: Create a strategic plan via mem0_memory(action="store_plan", content={{...}})
+            Format: content={{objective, current_phase, total_phases, phases: [{{id, title, status, criteria}}]}}
             Then begin reconnaissance and target information gathering guided by the plan
-            Store all findings immediately with category="finding"
+            Store all findings immediately with category="finding" (NOT "observation" for exploits!)
+            {category_guidance}
             """
         ).strip()
 
@@ -573,17 +585,41 @@ def get_system_prompt(
         _checkpoints = [int(max_steps * pct) for pct in [0.2, 0.4, 0.6, 0.8]]
         _next_checkpoint = next((cp for cp in _checkpoints if cp > current_step), max_steps)
         _steps_until = max(0, _next_checkpoint - current_step)
-        
+
         lines = []
         lines.append(f"Budget Used: {_budget_pct}% ({current_step}/{max_steps})")
-        lines.append(f"Next Checkpoint: Step {_next_checkpoint} (in {_steps_until} steps)")
+
+        # Checkpoint-specific actionable guidance
+        if current_step in _checkpoints or (current_step > 0 and current_step == _checkpoints[0]):
+            checkpoint_idx = _checkpoints.index(current_step) if current_step in _checkpoints else 0
+            checkpoint_pct = [20, 40, 60, 80][checkpoint_idx]
+            lines.append(f"**CHECKPOINT {checkpoint_pct}% REACHED**")
+
+            if checkpoint_pct == 20:
+                lines.append("ACTION: Call get_plan. Evaluate: What capabilities gained? Phase 1 criteria met?")
+            elif checkpoint_pct == 40:
+                lines.append("ACTION: Call get_plan. Evaluate: Confidence trend rising/flat/falling? Flat = pivot NOW.")
+            elif checkpoint_pct == 60:
+                lines.append("ACTION: Call get_plan. If stuck (no findings), deploy swarm with different approach classes.")
+            elif checkpoint_pct == 80:
+                lines.append("ACTION: Call get_plan. Focus ONLY on highest-confidence path. No new exploration.")
+        else:
+            lines.append(f"Next Checkpoint: Step {_next_checkpoint} (in {_steps_until} steps)")
+            # Add warning if close to checkpoint
+            if _steps_until <= 3 and _steps_until > 0:
+                lines.append(f"Checkpoint approaching. Prepare to evaluate plan.")
+
         if plan_current_phase is not None:
             lines.append(f"Current Phase: {plan_current_phase}")
-        
-        # Add checkpoint warning if close/overdue
-        if _steps_until <= 5:
-            lines.append(f"WARNING: Checkpoint approaching. Review plan and confidence.")
-        
+
+        # Budget-based urgency
+        if _budget_pct >= 90:
+            lines.append("FINAL: Budget >90%. Verify objective complete before stop(). Check termination_policy.")
+        elif _budget_pct >= 80:
+            lines.append("CRITICAL: Budget >80%. Focus on single highest-confidence path only.")
+        elif _budget_pct >= 60:
+            lines.append("WARNING: Budget >60%. If no findings yet, deploy specialists/swarm NOW.")
+
         reflection_snapshot = "\n".join(lines)
     except Exception:
         reflection_snapshot = "Budget: Unknown"

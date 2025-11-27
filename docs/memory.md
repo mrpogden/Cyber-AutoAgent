@@ -2,6 +2,14 @@
 
 Cyber-AutoAgent implements persistent memory using Mem0 with automatic reflection, strategic planning, and evidence categorization. The system supports multiple backend configurations for different deployment scenarios.
 
+## Key Features
+
+- **Operation Scoping**: Memories are automatically scoped to the current operation via `run_id`
+- **Cross-Operation Learning**: Query across all operations using `cross_operation=True`
+- **Thread-Safe Writes**: FAISS backend uses locking for safe concurrent writes (swarm mode)
+- **Category Validation**: Invalid categories are auto-corrected to prevent empty reports
+- **Status Validation**: Contradictory status fields are automatically reconciled
+
 ## Architecture
 
 ```mermaid
@@ -17,15 +25,8 @@ graph LR
     E --> H[OpenSearch + Bedrock]
     F --> I[Local FAISS Store]
 
-    B --> J[Reflection Engine]
-    J --> K{Trigger Evaluation}
-    K -->|Critical Finding| L[Immediate Reflection]
-    K -->|Threshold Reached| L
-    K -->|Phase Transition| L
-
     style B fill:#e3f2fd,stroke:#333,stroke-width:2px
     style F fill:#e8f5e8,stroke:#333,stroke-width:2px
-    style J fill:#fff3e0,stroke:#333,stroke-width:2px
 ```
 
 ## Backend Selection
@@ -64,10 +65,12 @@ sequenceDiagram
 
 ### FAISS Backend
 **Default Configuration:**
-- **Storage Location**: `./outputs/<target>/memory/`
+- **Storage Location**:
+  - Default (operation isolation): `./outputs/<target>/memory/<operation_id>/`
+  - Shared mode (`MEMORY_ISOLATION=shared`): `./outputs/<target>/memory/`
 - **Embedder**: AWS Bedrock Titan Text v2 (1024 dimensions)
 - **LLM**: Claude 3.5 Sonnet
-- **Characteristics**: Local persistence, no external dependencies
+- **Characteristics**: Local persistence, no external dependencies, thread-safe writes
 
 ### OpenSearch Backend
 **AWS Managed Configuration:**
@@ -94,45 +97,57 @@ mem0_memory(
     user_id="cyber_agent",
     metadata={
         "category": "finding",
-        "severity": "critical",
+        "severity": "CRITICAL",
         "confidence": "95%",
-        "module": "web_security",
-        "created_at": "2024-01-15T10:30:00Z"
+        "status": "verified"
     }
 )
 ```
 
 ### Category Taxonomy
 
-**Core Categories:**
-- **finding**: Security discoveries with severity assessment
-- **plan**: Strategic assessment roadmaps
-- **reflection**: Tactical analysis and pivot decisions
-- **vulnerability**: Confirmed security weaknesses
-- **exploit**: Successful exploitation evidence
-- **reconnaissance**: Target enumeration results
+**Report-Generating Categories** (appear in final reports):
+- **finding**: Exploited vulnerabilities, extracted data, confirmed security issues
+- **signal**: Security signals that warrant attention
+- **observation**: Reconnaissance data, failed attempts, recon findings
+- **discovery**: Techniques learned, patterns identified
 
-**Severity Levels:**
-- Critical: Immediate exploitation risk
-- High: Significant security impact
-- Medium: Moderate risk exposure
-- Low: Minor security concerns
+**Internal Categories** (not in reports):
+- **plan**: Strategic assessment roadmaps
+- **decision**: Tactical decisions and pivot reasoning
+
+**Category Decision Tree** (CRITICAL - wrong category = empty report):
+```
+Q: Did you EXPLOIT something or extract sensitive data?
+   YES → category="finding" (SQLi data dump, auth bypass, flag, RCE, creds)
+   NO  → Q: Did you CONFIRM a vulnerability exists?
+            YES → category="finding" (XSS fires, IDOR returns other user data)
+            NO  → category="observation" (recon, tech stack, failed attempts)
+```
+
+**Severity Levels** (for findings):
+- **CRITICAL**: Remote code execution, authentication bypass, data breach
+- **HIGH**: Significant security impact, privilege escalation
+- **MEDIUM**: Moderate risk, information disclosure
+- **LOW**: Minor security concerns, informational
 
 ## Advanced Features
 
-### Automatic Reflection
+### Budget Checkpoints
 
-Reflection triggers activate based on operational conditions:
+Plan evaluation triggers at budget checkpoints:
 
-**Trigger Conditions:**
-- Critical or high severity findings detected
-- Finding count threshold reached (default: 3)
-- Phase transition events
+**Checkpoint Actions:**
+- At 20%, 40%, 60%, 80% budget: `get_plan` → evaluate → update if needed
+- High severity findings may trigger immediate plan reassessment
+- Phase transitions tracked via plan status updates
 
 ```python
-# Reflection trigger evaluation
-if metadata.get("severity") in ["critical", "high"]:
-    self._should_reflect = True
+# Budget checkpoint workflow
+plan = mem0_memory(action="get_plan")
+# Evaluate: Is current phase criteria met?
+# If yes: Update phase status to "done", advance current_phase
+# Store updated plan
 ```
 
 ### Strategic Plan Management
@@ -140,15 +155,17 @@ if metadata.get("severity") in ["critical", "high"]:
 Hierarchical planning with phase tracking:
 
 ```python
-# Plan storage
+# Plan storage (required format)
 mem0_memory(
     action="store_plan",
     content={
         "objective": "Compromise web application",
+        "current_phase": 1,
+        "total_phases": 3,
         "phases": [
-            {"id": 1, "goal": "Map attack surface", "status": "active"},
-            {"id": 2, "goal": "Find vulnerabilities", "status": "pending"},
-            {"id": 3, "goal": "Exploit and persist", "status": "pending"}
+            {"id": 1, "title": "Reconnaissance", "status": "in_progress", "criteria": "Map attack surface"},
+            {"id": 2, "title": "Exploitation", "status": "pending", "criteria": "Exploit vulnerabilities"},
+            {"id": 3, "title": "Post-Exploitation", "status": "pending", "criteria": "Lateral movement"}
         ]
     }
 )
@@ -157,39 +174,55 @@ mem0_memory(
 current_plan = mem0_memory(action="get_plan")
 ```
 
-### Reflection Analysis
+**Required Plan Fields:**
+- `objective`: Overall mission goal
+- `current_phase`: Active phase number
+- `total_phases`: Total number of phases
+- `phases`: List of phase objects with `id`, `title`, `status`, `criteria`
 
-Context-aware tactical analysis:
+### Reflection via Plan Updates
+
+Tactical pivots are managed through plan updates:
 
 ```python
-# Generate reflection prompt
-reflection_prompt = mem0_memory(action="reflect")
-
-# Store reflection insights
+# Update plan with new strategy after reflection
 mem0_memory(
-    action="store_reflection",
-    content="Pivoting to API testing based on auth bypass finding"
+    action="store_plan",
+    content={
+        "objective": "Compromise web application",
+        "current_phase": 2,
+        "total_phases": 3,
+        "phases": [
+            {"id": 1, "title": "Reconnaissance", "status": "done", "criteria": "Attack surface mapped"},
+            {"id": 2, "title": "API Testing", "status": "in_progress", "criteria": "Pivoting from web to API"},
+            {"id": 3, "title": "Exploitation", "status": "pending", "criteria": "Achieve access"}
+        ]
+    }
 )
 
 ## Storage Structure
 
-### FAISS Backend Layout
+### FAISS Backend Layout (Default - Per-Operation Isolation)
+```
+./outputs/<target>/memory/<operation_id>/
+├── mem0.faiss           # Vector embeddings (FAISS index)
+└── mem0.pkl             # Metadata storage (pickle: docstore + ID mapping)
+```
+
+### FAISS Backend Layout (Shared Mode)
 ```
 ./outputs/<target>/memory/
-├── config.json           # Backend configuration
-├── graph_data/          # Relationship graphs
-├── key_value_data/      # Metadata storage
-├── sqlite.db            # Structured data
-└── vector_data/         # Embeddings
+├── mem0.faiss           # Vector embeddings (FAISS index)
+└── mem0.pkl             # Metadata storage (pickle: docstore + ID mapping)
 ```
 
 ### Operation Output Structure
 ```
-./outputs/<target>/OP_<timestamp>/
+./outputs/<target>/<operation_id>/
+├── artifacts/           # Operation artifacts
 ├── report.md            # Final assessment report
-├── logs/               # Operation logs
-│   └── cyber_operations.log
-└── utils/              # Operation artifacts
+└── logs/               # Operation logs
+    └── cyber_operations.log
 ```
 
 ## Memory Tool Usage
@@ -220,38 +253,83 @@ mem0_memory(action="delete", memory_id="mem_123")
 
 ### Advanced Operations
 ```python
-# Store strategic plan
+# Store strategic plan (dict format required)
 mem0_memory(
     action="store_plan",
-    content="Phase 1: Recon. Phase 2: Exploit web vulns. Phase 3: Lateral movement."
+    content={
+        "objective": "Compromise web application",
+        "current_phase": 1,
+        "total_phases": 3,
+        "phases": [
+            {"id": 1, "title": "Recon", "status": "in_progress", "criteria": "Map attack surface"},
+            {"id": 2, "title": "Exploit", "status": "pending", "criteria": "Find and exploit vulns"},
+            {"id": 3, "title": "Persist", "status": "pending", "criteria": "Maintain access"}
+        ]
+    }
 )
 
 # Get current plan
 current_plan = mem0_memory(action="get_plan")
 
-# Trigger reflection analysis
-reflection_prompt = mem0_memory(action="reflect")
-
-# Store reflection insights
+# Update plan after tactical pivot
 mem0_memory(
-    action="store_reflection", 
-    content="Web app heavily fortified, pivoting to API endpoints"
+    action="store_plan",
+    content={
+        "objective": "Compromise web application",
+        "current_phase": 2,
+        "total_phases": 3,
+        "phases": [
+            {"id": 1, "title": "Recon", "status": "done", "criteria": "Attack surface mapped"},
+            {"id": 2, "title": "API Testing", "status": "in_progress", "criteria": "Web fortified, pivot to API"},
+            {"id": 3, "title": "Exploit", "status": "pending", "criteria": "Achieve access"}
+        ]
+    }
 )
 ```
 
 ### Memory Query Patterns
 ```python
-# Search by category
-mem0_memory(action="retrieve", query="category:finding")
+# Semantic search (current operation only - default)
+mem0_memory(action="retrieve", query="SQL injection vulnerabilities")
 
-# Search by severity
-mem0_memory(action="retrieve", query="severity:critical")
+# Search with metadata filter
+mem0_memory(
+    action="retrieve",
+    query="authentication bypass",
+    metadata={"category": "finding", "severity": "CRITICAL"}
+)
 
-# Search by module
-mem0_memory(action="retrieve", query="module:web_security")
+# Cross-operation learning (search ALL operations)
+mem0_memory(
+    action="retrieve",
+    query="SQL injection techniques",
+    cross_operation=True  # Enables cross-learning
+)
 
-# Complex queries
-mem0_memory(action="retrieve", query="SQL injection critical web_security")
+# List memories from current operation
+mem0_memory(action="list", user_id="cyber_agent")
+
+# List all memories across operations
+mem0_memory(action="list", user_id="cyber_agent", cross_operation=True)
+```
+
+### Cross-Operation Learning
+```python
+# Learn from past successful exploits
+mem0_memory(
+    action="retrieve",
+    query="successful exploitation techniques",
+    metadata={"status": "verified"},
+    cross_operation=True
+)
+
+# Find what blocked previous attempts
+mem0_memory(
+    action="retrieve",
+    query="blocked or filtered",
+    metadata={"category": "observation"},
+    cross_operation=True
+)
 ```
 
 ## Configuration
@@ -288,10 +366,30 @@ Structured finding format ensures consistent evidence collection:
 ### Metadata Standards
 
 **Required Fields:**
-- **category**: Taxonomy classification
-- **severity**: Risk level (critical/high/medium/low)
-- **confidence**: Assessment certainty (percentage)
-- **module**: Source module identifier
+- **category**: Taxonomy classification (finding, observation, discovery, signal) - **REQUIRED, missing category raises error**
+- **severity**: Risk level for findings (CRITICAL/HIGH/MEDIUM/LOW)
+- **confidence**: Assessment certainty (percentage, e.g., "85%")
+
+> **Note**: The `category` field is mandatory for store operations. Attempting to store without a category will raise a `ValueError` with guidance on proper categorization.
+
+**Optional Fields:**
+- **status**: Verification state (hypothesis, unverified, verified)
+- **validation_status**: Submission state (hypothesis, submission_accepted)
+- **technique**: Exploitation technique used
+- **challenge_id**: CTF challenge identifier
+
+### Status Validation
+
+The memory system automatically validates and corrects inconsistent status fields:
+
+```python
+# These contradictions are auto-corrected:
+# status="verified" + validation_status="hypothesis" → validation_status="verified"
+# validation_status="submission_accepted" + status="hypothesis" → status="verified"
+
+# FORBIDDEN: status="solved" is ambiguous and auto-converts to "hypothesis"
+# Use status="verified" for confirmed findings
+```
 
 ### Plan Management
 
@@ -300,12 +398,12 @@ Structured finding format ensures consistent evidence collection:
 2. Update phase status during execution
 3. Adapt strategy through reflection
 
-### Reflection System
+### Plan-Based Strategy Updates
 
 **Operational Flow:**
-- Automatic triggering based on findings
-- Configurable threshold (default: 3 findings)
-- Strategic pivot recommendations
+- Check plan status at budget checkpoints (20%, 40%, 60%, 80%)
+- Update phase status when criteria met
+- Store updated plan with `store_plan` action
 
 ### Query Optimization
 
@@ -332,14 +430,31 @@ Structured finding format ensures consistent evidence collection:
 
 ### Memory Persistence
 
-**Default Behavior:**
-- Memory persists per-target across operations
-- Cross-operation learning enabled
-- Historical context maintained
+**Default Behavior (Operation Isolation):**
+- Each operation gets its own isolated memory store
+- No automatic cross-operation contamination
+- Use `cross_operation=True` to explicitly query across operations
 
-**Storage Path Pattern:**
+**Shared Mode (`MEMORY_ISOLATION=shared`):**
+- All operations share a single memory store per target
+- Automatic cross-operation learning
+- Use `run_id` filtering for operation-specific queries
+
+**Storage Path Patterns:**
 ```
+# Default (operation isolation)
+./outputs/<target>/memory/<operation_id>/
+
+# Shared mode
 ./outputs/<target>/memory/
 ```
 
-Memory isolation ensures target-specific knowledge remains separated while enabling cumulative learning across multiple assessment operations against the same target.
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMORY_ISOLATION` | `operation` | `operation` for isolated stores, `shared` for single store |
+| `CYBER_OPERATION_ID` | Auto-generated | Operation identifier for scoping |
+| `MEM0_LIST_LIMIT` | `100` | Default limit for list/retrieve operations |
+
+Memory isolation ensures target-specific knowledge remains separated while enabling explicit cross-operation learning when needed via the `cross_operation` parameter.

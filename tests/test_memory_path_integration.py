@@ -271,7 +271,11 @@ class TestMemoryToolsPathConstruction:
     def test_faiss_path_construction(
         self, mock_from_config, mock_makedirs, mock_config_manager
     ):
-        """Test FAISS path construction in memory tools."""
+        """Test FAISS path construction in memory tools.
+
+        Default isolation mode is 'operation' which creates per-operation stores:
+        outputs/<target>/memory/<operation_id>/
+        """
         # Mock config manager
         mock_config_manager.return_value.get_mem0_service_config.return_value = {
             "vector_store": {"provider": "faiss", "config": {}},
@@ -288,8 +292,9 @@ class TestMemoryToolsPathConstruction:
         # Create client
         Mem0ServiceClient(config)
 
-        # Verify makedirs was called with correct path
-        expected_path = os.path.join("outputs", "example.com", "memory")
+        # Verify makedirs was called with correct path (includes operation_id in default mode)
+        # Default MEMORY_ISOLATION=operation creates per-operation stores
+        expected_path = os.path.join("outputs", "example.com", "memory", "OP_20250718_123456")
         mock_makedirs.assert_called_with(expected_path, exist_ok=True)
 
     @patch("modules.tools.memory.get_config_manager")

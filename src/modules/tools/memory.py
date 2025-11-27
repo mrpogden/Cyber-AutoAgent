@@ -48,7 +48,7 @@ Plan & Reflection:
 - Stuck detection: Phase >40% budget → force advance with context note
 
 Adaptation Tracking:
-- After failed attempts: store("[BLOCKED] Approach X at endpoint Y", metadata={"category": "adaptation", "retry_count": n})
+- After failed attempts: store("[OBSERVATION] Approach X blocked at endpoint Y", metadata={"category": "observation", "blocker": "WAF", "retry_count": n})
 - Include what was blocked (script tags, specific chars, etc.) and next strategy
 - After 3 retries with same approach, mandatory pivot to different technique
 
@@ -127,6 +127,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -152,6 +153,9 @@ console = Console()
 # Global configuration and client
 _MEMORY_CONFIG = None
 _MEMORY_CLIENT = None
+
+# Thread lock for FAISS write safety (prevents corruption during concurrent writes)
+_FAISS_WRITE_LOCK = threading.Lock()
 
 
 def _sanitize_toon_value(value: Any) -> str:
@@ -184,89 +188,6 @@ def _format_plan_as_toon(plan_content: Dict[str, Any]) -> str:
             )
         )
     return "\n".join([*overview_lines, *phase_lines]).strip()
-
-
-def _infer_plan_from_text(plan_text: str) -> Optional[Dict[str, Any]]:
-    """Best-effort parser that converts legacy [PLAN] text blobs into structured dicts."""
-    if not isinstance(plan_text, str):
-        return None
-    text = plan_text.strip()
-    if not text:
-        return None
-    if text.startswith("[PLAN"):
-        text = text.split("]", 1)[-1].strip()
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return None
-
-    objective = ""
-    current_phase_hint = None
-    total_phases_hint = None
-    phase_lines: list[tuple[int, str, str]] = []
-
-    for line in lines:
-        lower = line.lower()
-        if "objective:" in lower and not objective:
-            objective = line.split(":", 1)[1].strip()
-            continue
-        if lower.startswith("status:"):
-            # e.g., Status: Phase 1 active
-            tokens = line.split()
-            for idx, token in enumerate(tokens):
-                if token.lower() == "phase" and idx + 1 < len(tokens):
-                    try:
-                        current_phase_hint = int(tokens[idx + 1])
-                        break
-                    except ValueError:
-                        continue
-            continue
-
-        match = re.match(
-            r"^(\d+)[\).]?\s+([^:–—>→-]+?)(?:\s*(?:->|→|—|-|–)\s*)(.+)$", line
-        )
-        if match:
-            phase_id = int(match.group(1))
-            title = match.group(2).strip()
-            criteria = match.group(3).strip()
-            phase_lines.append((phase_id, title, criteria))
-
-    if not phase_lines:
-        return None
-
-    phase_lines.sort(key=lambda item: item[0])
-    total_phases_hint = len(phase_lines)
-    if current_phase_hint is None and phase_lines:
-        current_phase_hint = phase_lines[0][0]
-
-    phases = []
-    for phase_id, title, criteria in phase_lines:
-        if current_phase_hint is None:
-            status = "pending"
-        elif phase_id < current_phase_hint:
-            status = "done"
-        elif phase_id == current_phase_hint:
-            status = "active"
-        else:
-            status = "pending"
-        phases.append(
-            {
-                "id": phase_id,
-                "title": title or f"Phase {phase_id}",
-                "status": status,
-                "criteria": criteria or "Define next steps",
-            }
-        )
-
-    if not objective:
-        objective = "Strategic assessment"
-
-    return {
-        "objective": objective,
-        "current_phase": current_phase_hint or phases[0]["id"],
-        "total_phases": total_phases_hint,
-        "phases": phases,
-    }
 
 
 TOOL_SPEC = {
@@ -349,10 +270,20 @@ TOOL_SPEC = {
                 "metadata": {
                     "type": "object",
                     "description": (
-                        "For store: metadata dict with category (required for reports: finding/signal/observation/discovery), "
+                        "For store: metadata dict with category (REQUIRED: finding/signal/observation/discovery), "
                         "severity (CRITICAL/HIGH/MEDIUM/LOW), status (verified/hypothesis), validation_status, technique, etc. "
-                        "For retrieve: metadata dict used as filters (e.g., {category: 'finding', status: 'verified'})."
+                        "For retrieve: metadata dict used as filters (e.g., {category: 'finding', status: 'verified'}). "
+                        "NOTE: category is REQUIRED for store action - missing category will raise an error."
                     ),
+                },
+                "cross_operation": {
+                    "type": "boolean",
+                    "description": (
+                        "If True, search/list across ALL operations for cross-learning. "
+                        "Default False = scoped to current operation only. "
+                        "Use True to learn from past operations (e.g., retrieve(query='SQLi techniques', cross_operation=True))."
+                    ),
+                    "default": False,
                 },
             },
             "required": ["action"],
@@ -909,7 +840,10 @@ class Mem0ServiceClient:
                 metadata
             )
 
-            result = self.mem0.add(**add_kwargs)
+            # Use thread lock for FAISS write safety (prevents index corruption
+            # during concurrent writes from swarm agents)
+            with _FAISS_WRITE_LOCK:
+                result = self.mem0.add(**add_kwargs)
 
             # Debug: Verify what was actually stored
             logger.info(
@@ -937,41 +871,55 @@ class Mem0ServiceClient:
         *,
         limit: Optional[int] = None,
         page: int = 1,
+        run_id: Optional[str] = None,
     ):
         """List memories for a user/agent with safe defaults and pagination.
 
-        Falls back gracefully if backend doesn't support limit/page.
+        Args:
+            user_id: User identifier
+            agent_id: Agent identifier
+            limit: Maximum number of memories to return
+            page: Page number for pagination
+            run_id: Operation/session ID for scoping (None = all operations)
+
+        Falls back gracefully if backend doesn't support limit/page/run_id.
         """
         if not user_id and not agent_id:
             raise ValueError("Either user_id or agent_id must be provided")
 
         logger.debug(
-            "Calling mem0.get_all with user_id=%s, agent_id=%s", user_id, agent_id
+            "Calling mem0.get_all with user_id=%s, agent_id=%s, run_id=%s",
+            user_id, agent_id, run_id
         )
 
-        # Determine effective limit from env or passed arg
+        # Determine effective limit from env or passed arg (default 100 for report consistency)
         try:
-            default_limit = int(os.getenv("MEM0_LIST_LIMIT", "20"))
+            default_limit = int(os.getenv("MEM0_LIST_LIMIT", "100"))
         except Exception:
-            default_limit = 20
+            default_limit = 100
         eff_limit = (
             int(limit) if isinstance(limit, int) and limit > 0 else default_limit
         )
+
+        # Build base kwargs
+        base_kwargs = {"user_id": user_id, "agent_id": agent_id}
+        if run_id:
+            base_kwargs["run_id"] = run_id
 
         # Try variants: with limit/page, with limit only, then no args
         # Normalize and slice to eff_limit as a last resort
         try:
             try:
                 result = self.mem0.get_all(
-                    user_id=user_id, agent_id=agent_id, limit=eff_limit, page=page
+                    **base_kwargs, limit=eff_limit, page=page
                 )
             except TypeError:
                 try:
                     result = self.mem0.get_all(
-                        user_id=user_id, agent_id=agent_id, limit=eff_limit
+                        **base_kwargs, limit=eff_limit
                     )
                 except TypeError:
-                    result = self.mem0.get_all(user_id=user_id, agent_id=agent_id)
+                    result = self.mem0.get_all(**base_kwargs)
             logger.debug("mem0.get_all returned type: %s", type(result))
             # Normalize structures
             normalised = self._normalise_results_list(result)
@@ -1004,7 +952,7 @@ class Mem0ServiceClient:
         self,
         query: str,
         filters: Optional[Dict[str, Any]] = None,
-        limit: int = 20,
+        limit: int = 100,
         *,
         user_id: str = "cyber_agent",
         agent_id: Optional[str] = None,
@@ -1015,7 +963,7 @@ class Mem0ServiceClient:
         Args:
             query: Semantic search query
             filters: Metadata filters (legacy - use run_id for operation scoping)
-            limit: Maximum results to return
+            limit: Maximum results to return (default 100 for report consistency)
             user_id: User identifier
             agent_id: Agent identifier
             run_id: Run/operation ID for native mem0 scoping (recommended)
@@ -1025,7 +973,7 @@ class Mem0ServiceClient:
         """
 
         filters = filters or {}
-        top_k = max(int(limit or 20), 1)
+        top_k = max(int(limit or 100), 1)
 
         def _coerce_entry(entry: Any) -> Dict[str, Any]:
             """Ensure every entry behaves like a memory dict."""
@@ -1080,7 +1028,10 @@ class Mem0ServiceClient:
 
         # Fallback: list memories and apply lightweight filtering locally
         try:
-            all_memories = self.list_memories(user_id=user_id, agent_id=agent_id)
+            # Pass run_id to list_memories for consistent scoping
+            all_memories = self.list_memories(
+                user_id=user_id, agent_id=agent_id, run_id=run_id
+            )
         except Exception as exc:  # pragma: no cover - defensive fallback
             logger.warning("Fallback memory listing failed during search: %s", exc)
             return []
@@ -1090,6 +1041,15 @@ class Mem0ServiceClient:
             raw_entries = all_memories
 
         raw_entries = [_coerce_entry(entry) for entry in raw_entries]
+
+        # If run_id was provided but list_memories didn't filter (backend limitation),
+        # apply local filtering by operation_id in metadata
+        if run_id:
+            raw_entries = [
+                e for e in raw_entries
+                if e.get("metadata", {}).get("operation_id") == run_id
+                or e.get("run_id") == run_id
+            ]
 
         def _matches_filters(entry: Dict[str, Any]) -> bool:
             """Match filters with support for simple list values (FAISS-compatible)."""
@@ -1398,8 +1358,8 @@ class Mem0ServiceClient:
             Most recent active plan or None if no plans found
         """
         try:
-            # Prefer deterministic listing over semantic search to avoid stale snapshots
-            all_memories = self.list_memories(user_id=user_id)
+            # Use run_id scoping to get operation-specific plans
+            all_memories = self.list_memories(user_id=user_id, run_id=operation_id, limit=100)
 
             if isinstance(all_memories, dict):
                 raw = (
@@ -1412,24 +1372,13 @@ class Mem0ServiceClient:
             else:
                 raw = []
 
-            # Filter to plan items, optionally scoped to operation_id
+            # Filter to plan items from current operation
             plan_items: List[Dict[str, Any]] = []
             for m in raw:
                 meta = m.get("metadata", {}) or {}
                 if str(meta.get("category", "")) != "plan":
                     continue
-                if operation_id and str(meta.get("operation_id", "")) != str(
-                    operation_id
-                ):
-                    continue
                 plan_items.append(m)
-
-            if not plan_items:
-                # Fallback: if op-scoped search had no results, try any plan
-                for m in raw:
-                    meta = m.get("metadata", {}) or {}
-                    if str(meta.get("category", "")) == "plan":
-                        plan_items.append(m)
 
             if not plan_items:
                 return None
@@ -1852,12 +1801,13 @@ def get_memory_client(silent: bool = False) -> Optional[Mem0ServiceClient]:
 @tool
 def mem0_memory(
     action: str,
-    content: Optional[str] = None,
+    content: Union[str, Dict[str, Any], None] = None,
     memory_id: Optional[str] = None,
     query: Optional[str] = None,
     user_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     metadata: Optional[Dict] = None,
+    cross_operation: bool = False,
 ) -> str:
     """
     Memory management with automatic operation scoping and cross-session learning.
@@ -1896,23 +1846,35 @@ def mem0_memory(
         plan        Strategic planning - internal only, NOT in reports
         decision    Filtering choices - internal only, NOT in reports
 
+    CATEGORY DECISION TREE (CRITICAL - wrong category = empty report):
+        Q: Did you EXPLOIT something or extract sensitive data?
+           YES → category="finding" (SQLi data dump, auth bypass, flag, RCE, creds)
+           NO  → Q: Did you CONFIRM a vulnerability exists?
+                    YES → category="finding" (XSS fires, IDOR returns other user data)
+                    NO  → category="observation" (recon, tech stack, failed attempts)
+
+        COMMON MISTAKE: Using category="observation" for successful exploits
+        RESULT: Report generator finds 0 findings → NO REPORT GENERATED
+        FIX: ANY successful exploit or confirmed vuln = category="finding"
+
     CROSS-SESSION LEARNING:
-        Memory Isolation: Per-operation stores prevent parallel corruption
-        - Each operation: ./outputs/<target>/memory/<operation_id>/mem0_faiss
-        - Parallel-safe: 5 agents can run simultaneously without conflicts
-        - Set MEMORY_ISOLATION=shared for automatic cross-learning (sequential only)
+        Memory Store: Per-operation FAISS store with logical run_id scoping
+        - Default path: ./outputs/<target>/memory/<operation_id>/ (MEMORY_ISOLATION=operation)
+        - Shared mode: ./outputs/<target>/memory/ (MEMORY_ISOLATION=shared)
+        - Thread-safe: Multiple swarm agents can write concurrently (uses lock)
 
         Operation Scoping: Memories auto-scoped via run_id (CYBER_OPERATION_ID)
-        - Report gen retrieves operation-specific first
-        - Falls back to general evidence for cross-learning
+        - store: Auto-tagged with current operation's run_id
+        - retrieve: Scoped to current operation by default
+        - retrieve(cross_operation=True): Search ALL operations for cross-learning
+        - list: Scoped to current operation by default
+        - list(cross_operation=True): List ALL operations
 
-        Swarm Intelligence: Agents query previous operations explicitly
-        - Query format: Use retrieve with semantic search (not scoped to current operation)
-        - Skip verified: query for status="verified" + validation_status="submission_accepted"
-        - IGNORE hypotheses: status="hypothesis" means unverified, retry challenge
-        - Learn techniques: query category="discovery"
+        Cross-Learning Query Examples:
+        - Learn from past: retrieve(query="SQLi techniques", cross_operation=True)
+        - Skip verified: metadata={"status": "verified"} to find solved challenges
+        - Learn techniques: metadata={"category": "discovery"}
         - Avoid failures: query for failed_technique or blocker in metadata
-        - Share progress: Store observations every 5-10 steps
 
     STORAGE RULES:
         1. ONE finding = ONE memory (atomic, not summaries)
@@ -1938,6 +1900,8 @@ def mem0_memory(
         user_id: User ID (defaults to 'cyber_agent')
         agent_id: Agent ID
         metadata: Dict with category (required), severity, technique, challenge_id, status, etc.
+        cross_operation: If True, search/list across ALL operations (for cross-learning).
+                        Default False = scoped to current operation only.
 
     Returns:
         JSON/text response with operation result
@@ -2002,12 +1966,6 @@ def mem0_memory(
 
         # Check if we're in development mode
         strands_dev = os.environ.get("BYPASS_TOOL_CONSENT", "").lower() == "true"
-
-        if action == "store" and isinstance(content, str):
-            inferred_plan = _infer_plan_from_text(content)
-            if inferred_plan:
-                action = "store_plan"
-                content = json.dumps(inferred_plan)
 
         # Handle different actions
         if action == "store_plan":
@@ -2099,11 +2057,22 @@ def mem0_memory(
                 logger.debug("Tagged memory with operation_id=%s (metadata backup)", op_id)
 
             # Validate category field exists (CRITICAL for report generation)
+            # Category is REQUIRED - agents must explicitly specify finding vs observation
             if "category" not in metadata:
+                raise ValueError(
+                    "MISSING CATEGORY: metadata must include 'category' field.\n"
+                    "  - category='finding' for exploits, vulns, flags (APPEARS IN REPORTS)\n"
+                    "  - category='observation' for recon, failed attempts (background context)\n"
+                    "Example: metadata={'category': 'finding', 'severity': 'HIGH'}"
+                )
+
+            # Validate category is a known value
+            VALID_CATEGORIES = {"finding", "signal", "observation", "discovery", "plan", "decision"}
+            category_val = str(metadata.get("category", "")).lower()
+            if category_val and category_val not in VALID_CATEGORIES:
                 logger.warning(
-                    "MISSING CATEGORY in metadata - defaulting to 'observation'. "
-                    "This memory will appear in reports but may be miscategorized. "
-                    "Add metadata={'category': 'finding'} for exploits."
+                    "Invalid category '%s'. Valid categories: %s. Defaulting to 'observation'.",
+                    category_val, VALID_CATEGORIES
                 )
                 metadata["category"] = "observation"
 
@@ -2170,6 +2139,28 @@ def mem0_memory(
                         metadata.get("confidence", "35%"), cap_to=40.0
                     )
 
+            # Cross-field validation: Ensure status and validation_status are consistent
+            status_val = str(metadata.get("status", "")).lower()
+            validation_status = str(metadata.get("validation_status", "")).lower()
+
+            # If status="verified" but validation_status contradicts, fix it
+            if status_val == "verified" and validation_status and validation_status not in ("verified", "submission_accepted"):
+                logger.warning(
+                    "Inconsistent status fields: status='verified' but validation_status='%s'. "
+                    "Setting validation_status='verified' to prevent contradiction.",
+                    validation_status
+                )
+                metadata["validation_status"] = "verified"
+
+            # If validation_status="submission_accepted" but status isn't "verified", fix it
+            if validation_status == "submission_accepted" and status_val != "verified":
+                logger.warning(
+                    "Inconsistent status fields: validation_status='submission_accepted' but status='%s'. "
+                    "Setting status='verified'.",
+                    status_val
+                )
+                metadata["status"] = "verified"
+
             # Suppress mem0's internal error logging during operation
             mem0_logger = logging.getLogger("root")
             original_level = mem0_logger.level
@@ -2180,22 +2171,29 @@ def mem0_memory(
                     cleaned_content, user_id, agent_id, metadata
                 )
             except Exception as store_error:
-                # Handle mem0 library errors gracefully
-                if "Extra data" in str(store_error) or "Expecting value" in str(
-                    store_error
-                ):
-                    # JSON parsing error in mem0 - return success but log issue
-                    fallback_result = [
-                        {
-                            "status": "stored",
-                            "content_preview": cleaned_content[:50] + "...",
-                        }
-                    ]
-                    if not strands_dev:
-                        console.print(
-                            "[yellow]Memory stored with minor parsing warnings[/yellow]"
+                # Handle mem0 library errors - attempt recovery before failing
+                error_str = str(store_error)
+                if "Extra data" in error_str or "Expecting value" in error_str:
+                    # JSON parsing error - try with more aggressive cleaning
+                    logger.warning("JSON parsing error in mem0, attempting recovery: %s", error_str)
+                    try:
+                        # Escape problematic characters and retry
+                        escaped_content = json.dumps(cleaned_content)[1:-1]  # Remove outer quotes
+                        results = _MEMORY_CLIENT.store_memory(
+                            escaped_content, user_id, agent_id, metadata
                         )
-                    return json.dumps(fallback_result, indent=2)
+                        logger.info("Memory stored after content escaping")
+                    except Exception as retry_error:
+                        # Recovery failed - log and return error (don't fake success!)
+                        logger.error(
+                            "Memory storage failed after retry: %s (original: %s)",
+                            retry_error, store_error
+                        )
+                        return json.dumps({
+                            "status": "error",
+                            "error": f"Storage failed: {store_error}",
+                            "content_preview": cleaned_content[:50] + "..."
+                        }, indent=2)
                 else:
                     raise store_error
             finally:
@@ -2227,12 +2225,17 @@ def mem0_memory(
             return json.dumps(memory, indent=2)
 
         elif action == "list":
-            # Respect MEM0_LIST_LIMIT if set, default to 20
+            # Respect MEM0_LIST_LIMIT if set, default to 100 (matches retrieve/report limits)
             try:
-                list_limit = int(os.getenv("MEM0_LIST_LIMIT", "20"))
+                list_limit = int(os.getenv("MEM0_LIST_LIMIT", "100"))
             except Exception:
-                list_limit = 20
-            memories = _MEMORY_CLIENT.list_memories(user_id, agent_id, limit=list_limit)
+                list_limit = 100
+
+            # Scope to current operation unless cross_operation=True
+            op_id = None if cross_operation else os.getenv("CYBER_OPERATION_ID")
+            memories = _MEMORY_CLIENT.list_memories(
+                user_id, agent_id, limit=list_limit, run_id=op_id
+            )
 
             # Debug logging to understand the response structure
             logger.debug("Memory list raw response type: %s", type(memories))
@@ -2275,21 +2278,29 @@ def mem0_memory(
             if not query:
                 raise ValueError("query is required for retrieve action")
 
+            # Get operation ID for scoped retrieval (matches how store_memory scopes data)
+            # If cross_operation=True, don't scope to current operation (enables cross-learning)
+            op_id = None if cross_operation else os.getenv("CYBER_OPERATION_ID")
+
             # Debug: Log retrieval parameters
             logger.debug(
-                "RETRIEVE query='%s', metadata_filters=%s, user_id=%s",
+                "RETRIEVE query='%s', metadata_filters=%s, user_id=%s, run_id=%s, cross_operation=%s",
                 query,
                 metadata,
-                user_id
+                user_id,
+                op_id,
+                cross_operation
             )
 
             # Use search() directly to support metadata filters (e.g., category, status)
+            # Include run_id to scope to current operation (unless cross_operation=True)
             memories = _MEMORY_CLIENT.search(
                 query=query,
                 filters=metadata,  # Pass metadata as filters for category/status filtering
-                limit=50,
+                limit=100,
                 user_id=user_id or "cyber_agent",
                 agent_id=agent_id,
+                run_id=op_id,  # None if cross_operation=True for cross-learning
             )
 
             # Normalize to list with better error handling
