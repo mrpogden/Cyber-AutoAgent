@@ -180,7 +180,7 @@ const CONFIG_FIELDS: ConfigField[] = [
   },
   {
     key: 'conversationPreserveLast', label: 'Preserve Last Messages', type: 'number', section: 'Operations',
-    description: 'Recent messages to preserve; dynamically scaled to 15% of window (default: 12). Maps to CYBER_CONVERSATION_PRESERVE_LAST.'
+    description: 'Recent messages to preserve; reduced from 12 to 5 to prevent pruning deadlock (default: 5). Maps to CYBER_CONVERSATION_PRESERVE_LAST.'
   },
   {
     key: 'toolMaxResultChars', label: 'Tool Max Result Size (chars)', type: 'number', section: 'Operations',

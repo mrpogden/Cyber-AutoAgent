@@ -496,7 +496,7 @@ export const defaultConfig: Config = {
   // Context Management
   conversationWindow: 100, // Default conversation window size (sliding window)
   conversationPreserveFirst: 1, // Preserve system messages
-  conversationPreserveLast: 12, // Preserve recent context (dynamically scaled to 15% of window)
+  conversationPreserveLast: 5, // Preserve recent context (reduced from 12 to prevent pruning deadlock)
   toolMaxResultChars: 30000, // Max tool output before truncation
   toolArtifactThreshold: 10000, // Externalize outputs larger than this
 
