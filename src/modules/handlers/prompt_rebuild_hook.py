@@ -13,6 +13,7 @@ Key Features:
 - Format-agnostic memory processing (handles [SQLI CONFIRMED] and other formats)
 """
 
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -187,6 +188,22 @@ class PromptRebuildHook(HookProvider):
                     "Failed to reload execution prompt during rebuild: %s", e
                 )
 
+            # Check for low findings and inject warning if needed
+            findings_warning = self._check_findings_gap(current_step)
+            if findings_warning:
+                new_prompt = new_prompt + "\n\n" + findings_warning
+                logger.warning("Injected findings gap warning at step %d", current_step)
+
+            # CRITICAL: Validate prompt before assignment
+            # SDK contract: system_prompt should never be None or empty
+            if not new_prompt or not new_prompt.strip():
+                logger.error(
+                    "Rebuilt prompt is empty or None at step %d. "
+                    "Keeping existing prompt to prevent agent failure.",
+                    current_step
+                )
+                return  # Abort rebuild, keep existing prompt
+
             # Update agent's system prompt
             event.agent.system_prompt = new_prompt
 
@@ -264,6 +281,90 @@ class PromptRebuildHook(HookProvider):
             logger.debug("Execution prompt mtime check failed: %s", e)
 
         return False
+
+    def _check_findings_gap(self, current_step: int) -> Optional[str]:
+        """Check if findings count is low compared to progress and inject warning.
+
+        Returns warning message if findings gap detected, None otherwise.
+        """
+        # Only check at significant progress points (20%, 40%, 60%, 80%)
+        progress_pct = (current_step / self.max_steps) * 100
+        checkpoint_thresholds = [20, 40, 60, 80]
+
+        # Find nearest checkpoint
+        nearest_checkpoint = None
+        for threshold in checkpoint_thresholds:
+            if progress_pct >= threshold - 5 and progress_pct <= threshold + 5:
+                nearest_checkpoint = threshold
+                break
+
+        if nearest_checkpoint is None:
+            return None
+
+        # Get metrics from callback handler
+        try:
+            memory_ops = getattr(self.callback_handler, "memory_ops", 0) or 0
+            evidence_count = getattr(self.callback_handler, "evidence_count", 0) or 0
+
+            # Also check actual memory for finding category count
+            findings_in_memory = 0
+            if self.memory and hasattr(self.memory, "list_memories"):
+                try:
+                    memories = self.memory.list_memories(
+                        user_id="cyber_agent",
+                        run_id=self.operation_id,
+                        limit=100
+                    )
+                    if isinstance(memories, dict):
+                        mem_list = memories.get("results", memories.get("memories", []))
+                    else:
+                        mem_list = memories or []
+
+                    for m in mem_list:
+                        meta = m.get("metadata", {}) or {}
+                        if meta.get("category") == "finding":
+                            findings_in_memory += 1
+                except Exception:
+                    pass
+
+            # Use higher of evidence_count or actual findings
+            actual_findings = max(evidence_count, findings_in_memory)
+
+            # Calculate expected minimum findings based on progress
+            # At 20%: expect at least 0-1, At 40%: 1-2, At 60%: 2-3, At 80%: 3+
+            expected_min = {20: 0, 40: 1, 60: 2, 80: 3}.get(nearest_checkpoint, 0)
+
+            # Generate warning if findings are low
+            if actual_findings < expected_min and memory_ops > 3:
+                warning = f"""<finding_gap_warning>
+⚠️ **CRITICAL: LOW FINDINGS DETECTED AT {nearest_checkpoint}% BUDGET**
+
+- Memory operations: {memory_ops}
+- Findings stored: {actual_findings}
+- Expected minimum at {nearest_checkpoint}%: {expected_min}+
+
+**Problem**: You are storing observations but NOT findings. Exploits won't appear in reports.
+
+**Action Required**:
+1. Review your recent work - did you confirm any vulnerabilities?
+2. If YES: Store them NOW with `category='finding'`
+3. If NO: Focus on exploitation, not just reconnaissance
+
+**Example - Store a finding:**
+```
+mem0_memory(action="store",
+    content="[FINDING] SQL injection in /api/login - extracted admin credentials",
+    metadata={{"category": "finding", "severity": "HIGH", "confidence": 85}})
+```
+
+Without category='finding', your work will NOT appear in the final report.
+</finding_gap_warning>"""
+                return warning
+
+        except Exception as e:
+            logger.debug("Findings gap check failed: %s", e)
+
+        return None
 
     def _query_memory_overview(self) -> Optional[Dict[str, Any]]:
         """Query memory for recent findings overview.
@@ -494,9 +595,24 @@ class PromptRebuildHook(HookProvider):
                 logger.error("LLM optimization failed: %s", llm_error)
                 return
 
-            # Phase 5: Persist optimized prompt
-            self.exec_prompt_path.write_text(optimized)
-            logger.info("Optimized execution prompt saved to %s", self.exec_prompt_path)
+            # Phase 5: Persist optimized prompt with error handling
+            try:
+                self.exec_prompt_path.write_text(optimized, encoding="utf-8")
+                logger.info("Optimized execution prompt saved to %s", self.exec_prompt_path)
+            except PermissionError as perm_err:
+                logger.error(
+                    "Permission denied writing optimized prompt to %s: %s",
+                    self.exec_prompt_path,
+                    perm_err
+                )
+                return  # Abort optimization, keep original
+            except OSError as os_err:
+                logger.error(
+                    "OS error writing optimized prompt to %s: %s",
+                    self.exec_prompt_path,
+                    os_err
+                )
+                return  # Abort optimization, keep original
 
             # Phase 6: Log optimization metrics
             logger.info(
