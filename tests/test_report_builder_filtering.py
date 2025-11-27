@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
 Tests for report_builder operation_id filtering logic.
-- Current implementation does NOT filter by operation_id (includes all memories for comprehensive report)
-- This is intentional behavior as per code comments in report_builder.py
+- Current implementation FILTERS by operation_id for per-operation reports
+- Memories with matching operation_id are included
+- Memories with different operation_id are EXCLUDED
+- Memories WITHOUT operation_id (untagged) are included for backward compatibility
 """
 
 from unittest.mock import patch
@@ -11,7 +13,8 @@ from modules.tools.report_builder import build_report_sections
 
 
 @patch("modules.tools.report_builder.Mem0ServiceClient")
-def test_report_builder_includes_all_operation_memories(mock_client_cls):
+def test_report_builder_filters_by_operation_id(mock_client_cls):
+    """Report builder should filter evidence by operation_id for per-operation reports."""
     op_id = "OP_123"
     # Mock list_memories to return both tagged and untagged
     mock_client = mock_client_cls.return_value
@@ -38,14 +41,18 @@ def test_report_builder_includes_all_operation_memories(mock_client_cls):
     out = build_report_sections(
         operation_id=op_id, target="example.com", objective="test"
     )
-    # Current implementation includes ALL findings regardless of operation_id
+    # Evidence from current operation should be included
     assert any(
         "/a" in e.get("content", "") for e in out.get("raw_evidence", []) or []
-    ), "Expected matching evidence"
-    # This is the changed behavior - we now include all memories for comprehensive reporting
-    assert any(
+    ), "Expected matching evidence from current operation"
+    # Evidence from OTHER operations should be EXCLUDED (filtered out)
+    assert not any(
         "/b" in e.get("content", "") for e in out.get("raw_evidence", []) or []
-    ), "Should include all operations for comprehensive report"
+    ), "Should EXCLUDE evidence from other operations"
+    # Untagged evidence (no operation_id) should be included for backward compatibility
+    assert any(
+        "/c" in e.get("content", "") for e in out.get("raw_evidence", []) or []
+    ), "Should include untagged evidence for backward compatibility"
 
 
 @patch("modules.tools.report_builder.Mem0ServiceClient")

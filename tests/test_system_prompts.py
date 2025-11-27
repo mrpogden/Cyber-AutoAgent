@@ -121,8 +121,10 @@ class TestGetSystemPrompt:
             output_config=output_config,
         )
 
-        assert "OUTPUT DIRECTORY STRUCTURE" in prompt
-        assert "/custom/output" in prompt
+        # OUTPUT DIRECTORY STRUCTURE section removed from prompts
+        # Verify the prompt still contains essential elements
+        assert "test.com" in prompt
+        assert "## MEMORY CONTEXT" in prompt
 
     def test_get_system_prompt_with_overlay_block(self, tmp_path):
         """Overlay file should render adaptive directives block."""
