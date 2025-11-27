@@ -67,12 +67,26 @@
 
 The React-based terminal interface is now the **default UI**, providing interactive configuration, real-time operation monitoring, and guided setup in all deployment modes.
 
+### Quick Install via pip
+
+```bash
+# Install from PyPI
+pip install caa
+
+# Run the CLI
+caa --help
+caa --target "http://example.com" --objective "Security assessment"
+```
+
 ### Local Development - Recommended
 
 ```bash
 # Clone and setup
 git clone https://github.com/westonbrown/Cyber-AutoAgent.git
 cd Cyber-AutoAgent
+
+# Install in editable mode
+pip install -e .
 
 # Build React terminal interface
 cd src/modules/interfaces/react

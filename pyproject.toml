@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cyber-autoagent"
-version = "0.1.3"
-description = "Autonomous cybersecurity agent designed for ethical security assessments"
+name = "caa"
+version = "0.1.4"
+description = "Cyber-AutoAgent: Autonomous AI agent for ethical security assessments"
 readme = "README.md"
 authors = [
     {name = "Cyber-AutoAgent Team", email = "aaron.weston.brown@gmail.com"}
@@ -77,6 +77,7 @@ Documentation = "https://github.com/cyber-autoagent/cyber-autoagent#readme"
 "Bug Tracker" = "https://github.com/cyber-autoagent/cyber-autoagent/issues"
 
 [project.scripts]
+caa = "cyberautoagent:main"
 cyber-autoagent = "cyberautoagent:main"
 
 [tool.setuptools.packages.find]

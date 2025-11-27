@@ -3,6 +3,12 @@
 
 FROM kalilinux/kali-rolling
 
+LABEL org.opencontainers.image.title="Cyber-AutoAgent"
+LABEL org.opencontainers.image.description="Autonomous AI agent for ethical security assessments"
+LABEL org.opencontainers.image.version="0.1.4"
+LABEL org.opencontainers.image.source="https://github.com/cyber-autoagent/cyber-autoagent"
+LABEL org.opencontainers.image.licenses="MIT"
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system packages, Python, and common security tools
