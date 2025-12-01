@@ -36,15 +36,73 @@ Select during setup or change via `/setup` command.
 
 ## Configuration
 
-Configuration persists to `~/.cyber-autoagent/config.json`.
+Cyber-AutoAgent offers **3 configuration methods**:
 
-### Model Providers
+### Method 1: Config Editor UI (Recommended)
+
+Launch the React interface to configure via UI:
+
+```bash
+cd src/modules/interfaces/react
+npm start
+```
+
+**In the Terminal:**
+1. Type `/config` to open Config Editor
+2. Select **Provider**: `litellm` (supports 300+ models)
+3. Configure **LLM Settings**:
+   - Model ID: `azure/gpt-5`, `moonshot/kimi-k2-thinking`, `openrouter/openrouter/polaris-alpha`
+   - Temperature: `1.0` (for reasoning models) or `0.95` (default)
+   - Max Tokens: `32000`
+   - Reasoning Effort: `medium` (for GPT-5/o1 models)
+4. Configure **Embedding Model**: `azure/text-embedding-3-large`
+5. Add **Provider Credentials**:
+   - Azure: API Key, API Base, API Version
+   - Moonshot: API Key
+   - OpenRouter: API Key
+6. Save settings - persists to `~/.cyber-autoagent/config.json`
+7. Type `/help` for available commands
+
+**Using Saved Config:**
+```bash
+# Auto-run uses saved config
+npm start -- --auto-run --target https://example.com --iterations 50
+```
+
+### Method 2: Environment Variables
+
+Direct configuration for Python CLI:
+
+**Azure OpenAI (GPT-5):**
+```bash
+export AZURE_API_KEY=your_key
+export AZURE_API_BASE=https://your-endpoint.openai.azure.com/
+export AZURE_API_VERSION=2024-12-01-preview
+export CYBER_AGENT_LLM_MODEL=azure/gpt-5
+export CYBER_AGENT_EMBEDDING_MODEL=azure/text-embedding-3-large
+export REASONING_EFFORT=medium
+```
 
 **AWS Bedrock:**
 ```bash
 export AWS_ACCESS_KEY_ID=your_key
 export AWS_SECRET_ACCESS_KEY=your_secret
 export AWS_REGION=us-east-1
+```
+
+**OpenRouter:**
+```bash
+export OPENROUTER_API_KEY=your_key
+export CYBER_AGENT_LLM_MODEL=openrouter/openrouter/polaris-alpha
+export CYBER_AGENT_EMBEDDING_MODEL=azure/text-embedding-3-large
+```
+
+**Moonshot AI:**
+```bash
+export MOONSHOT_API_KEY=your_key
+export CYBER_AGENT_LLM_MODEL=moonshot/kimi-k2-thinking
+export CYBER_AGENT_EMBEDDING_MODEL=azure/text-embedding-3-large
+export MEM0_LLM_MODEL=azure/gpt-4o  # Separate LLM for memory system
 ```
 
 **Ollama (Local):**
@@ -60,6 +118,28 @@ export OPENAI_API_KEY=your_key
 # or
 export ANTHROPIC_API_KEY=your_key
 ```
+
+### Method 3: Config File (Direct Edit)
+
+Advanced users can directly edit `~/.cyber-autoagent/config.json`:
+
+```json
+{
+  "modelProvider": "litellm",
+  "modelId": "azure/gpt-5",
+  "embeddingModel": "azure/text-embedding-3-large",
+  "temperature": 1.0,
+  "maxTokens": 32000,
+  "reasoningEffort": "medium",
+  "azureApiKey": "your_key",
+  "azureApiBase": "https://your-endpoint.openai.azure.com/",
+  "azureApiVersion": "2024-12-01-preview",
+  "observability": false,
+  "autoEvaluation": false
+}
+```
+
+**Supported Providers:** `bedrock`, `ollama`, `litellm` (300+ models)
 
 ### Configuration Commands
 
@@ -96,17 +176,48 @@ cyber-react \
 
 ### Command Line Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--target, -t` | Required | Target system URL or IP |
-| `--objective, -o` | Required | Assessment objective |
-| `--module, -m` | `general` | Security module: general, ctf |
-| `--iterations, -i` | `100` | Maximum tool executions |
-| `--provider` | `bedrock` | Model provider |
-| `--auto-run` | `false` | Skip interactive prompts |
-| `--auto-approve` | `false` | Auto-approve tool executions |
-| `--memory-mode` | `auto` | Memory: auto or fresh |
-| `--deployment-mode` | Auto | local-cli, single-container, full-stack |
+| Flag                   | Default   | Description                             |
+|------------------------|-----------|-----------------------------------------|
+| `--target, -t`         | Required  | Target system URL or IP                 |
+| `--objective, -o`      | Required  | Assessment objective                    |
+| `--module, -m`         | `general` | Security module: general, ctf           |
+| `--iterations, -i`     | `100`     | Maximum tool executions                 |
+| `--provider`           | `bedrock` | Model provider                          |
+| `--auto-run`           | `false`   | Skip interactive prompts                |
+| `--auto-approve`       | `false`   | Auto-approve tool executions            |
+| `--memory-mode`        | `auto`    | Memory: auto or fresh                   |
+| `--deployment-mode`    | Auto      | local-cli, single-container, full-stack |
+| `--mcp-enabled`        | `false`   | Enable MCP Tools                        |
+| `--mcp-conns` '[...]'  | None      | Configure MCP Tools                     |
+
+### Configuration Loading Priority
+
+When using `--auto-run` mode, configuration is loaded and merged in the following priority order:
+
+1. **Default Configuration** (lowest priority) - Built-in defaults from the application
+2. **Saved Configuration** (medium priority) - User settings from `~/.cyber-autoagent/config.json`
+3. **Command Line Flags** (highest priority) - Flags specified on the command line
+
+This means:
+- Your saved configuration from the React UI is automatically loaded and used
+- Command line flags override any saved settings
+- Defaults are only used for values not specified in saved config or CLI flags
+
+**Example:**
+```bash
+# If your config.json has modelProvider: "ollama" and observability: true
+# This command will use:
+# - modelProvider: "bedrock" (from CLI flag, overrides saved config)
+# - observability: true (from saved config)
+# - iterations: 50 (from CLI flag)
+# - All other settings from saved config or defaults
+
+cyber-react \
+  --target "https://example.com" \
+  --provider bedrock \
+  --iterations 50 \
+  --auto-run
+```
 
 ## Operation Modules
 
@@ -153,6 +264,90 @@ outputs/
 | **fresh** | Empty memory, no historical context | Baseline assessments |
 
 Control via `/config edit` or `--memory-mode` flag.
+
+## MCP Configuration
+
+The configuration block in `~/.cyber-autoagent/config.json` for MCP servers looks like the following. The terminal UI
+can be used to configure, command line options or environment variables.
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "connections": [
+      {
+         "id": "htb-mcp-server",
+         "transport": "stdio",  // or "sse", "streamable-http"
+         "command": ["./htb-mcp-server"],
+         "plugins": ["general"]  // or ["*"]
+      },
+      {
+         "id": "shyhurricane",
+         "transport": "streamable-http",
+         "server_url": "https://127.0.0.1:8000/mcp",
+         "plugins": ["*"], 
+         "timeoutSeconds": 900,
+         "allowedTools": ["port_scan", "directory_buster"]  // or ["*"]
+      }
+    ]
+  }
+}
+```
+
+Environment variable substitution is performed in the `headers` and `command` values, so that sensitive information is not stored in the configuration.
+
+The command line option `--mcp-conns` or environment variable `CYBER_MCP_CONNECTIONS` provides the `connections` block as a string.
+
+Examples:
+
+- `CYBER_MCP_ENABLED=true`
+- `CYBER_MCP_CONNECTIONS='[{"id":"...","transport":"..."}]'`
+- `--mcp-enabled --mcp-conns '[{"id":"...","transport":"..."}]'`
+
+### HackTheBox CTF MCP Configuration
+
+This is an example configuration for the HackTheBox CTF MCP server. Export your API key before running.
+
+```shell
+export HTB_TOKEN=xxx.yyy.zzz
+```
+
+```json
+{
+   "mcp": {
+      "enabled": true,
+      "connections": [
+         {
+            "id": "htbctf",
+            "transport": "sse",
+            "server_url": "https://mcp.ai.hackthebox.com/v1/ctf/sse",
+            "plugins": ["ctf"],
+            "headers": {"Authorization": "Bearer ${HTB_TOKEN}"}
+         }
+      ]
+   }
+}
+```
+
+### HexStrike AI
+
+```json
+{
+   "mcp": {
+      "enabled": true,
+      "connections": [
+         {
+            "id": "hex",
+            "transport": "stdio",
+            "command": ["python3", "/path/to/hexstrike-ai/hexstrike_mcp.py", "--server", "http://localhost:8888"],
+            "plugins": ["general"],
+            "timeoutSeconds": 300
+         }
+      ]
+   }
+}
+```
+
 
 ## Docker Management
 

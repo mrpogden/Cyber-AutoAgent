@@ -102,7 +102,7 @@ class StdoutEventEmitter:
             # Use ensure_ascii=True to properly escape control characters
             # This ensures that newlines in shell commands are properly escaped
             json_str = json.dumps(event, ensure_ascii=True)
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError):
             # If JSON serialization fails, try to clean up the event data
             try:
                 # Ensure output content is stringified to avoid "[object Object]" in UI
@@ -111,7 +111,9 @@ class StdoutEventEmitter:
                     if not isinstance(content, str):
                         try:
                             if isinstance(content, (dict, list)):
-                                event["content"] = json.dumps(content, ensure_ascii=False)
+                                event["content"] = json.dumps(
+                                    content, ensure_ascii=False
+                                )
                             else:
                                 event["content"] = str(content)
                         except Exception:
@@ -120,7 +122,7 @@ class StdoutEventEmitter:
                 # Use ensure_ascii=True to properly escape control characters
                 # This ensures that newlines in shell commands are properly escaped
                 json_str = json.dumps(event, ensure_ascii=True)
-            except (TypeError, ValueError) as e:
+            except (TypeError, ValueError):
                 # If JSON serialization fails, try to clean up the event data
                 try:
                     cleaned_event = self._clean_event_for_json(event)
@@ -129,7 +131,7 @@ class StdoutEventEmitter:
                     # Last resort: emit a simple error event
                     error_event = {
                         "type": "error",
-                        "error": f"Failed to serialize event: {str(e)}",
+                        "error": "Failed to serialize event; see logs for details",
                         "event_type": event.get("type", "unknown"),
                         "id": event.get("id", "unknown"),
                         "timestamp": event.get("timestamp", datetime.now().isoformat()),
@@ -197,12 +199,22 @@ class StdoutEventEmitter:
         event_type = event.get("type", "")
 
         # Tool events and metrics updates should have unique signatures to avoid deduplication
-        if event_type in ("tool_start", "tool_end", "tool_invocation_start", "tool_invocation_end", "metrics_update"):
+        if event_type in (
+            "tool_start",
+            "tool_end",
+            "tool_invocation_start",
+            "tool_invocation_end",
+            "metrics_update",
+        ):
             # Include timestamp to make each event unique
             return f"{event_type}_{event.get('tool_name', '')}_{event.get('timestamp', datetime.now().isoformat())}"
 
         # Create a copy without volatile fields for other events
-        sig_dict = {k: v for k, v in event.items() if k not in ("timestamp", "id", "duration", "metrics")}
+        sig_dict = {
+            k: v
+            for k, v in event.items()
+            if k not in ("timestamp", "id", "duration", "metrics")
+        }
 
         # Special handling for output events - include content for dedup
         if event_type == "output":
@@ -222,7 +234,9 @@ class StdoutEventEmitter:
         return json.dumps(sig_dict, sort_keys=True)
 
 
-def get_emitter(transport: str = None, operation_id: Optional[str] = None) -> EventEmitter:
+def get_emitter(
+    transport: str = None, operation_id: Optional[str] = None
+) -> EventEmitter:
     """Factory function to get the appropriate emitter.
 
     Args:

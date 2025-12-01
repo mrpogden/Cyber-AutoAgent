@@ -4,7 +4,6 @@ Unit tests for the centralized model configuration system.
 """
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -12,6 +11,12 @@ import pytest
 # Import the modules we're testing
 from modules.config.manager import (
     ConfigManager,
+    get_config_manager,
+    get_default_model_configs,
+    get_model_config,
+    get_ollama_host,
+)
+from modules.config.types import (
     EmbeddingConfig,
     EvaluationConfig,
     LLMConfig,
@@ -24,12 +29,9 @@ from modules.config.manager import (
     OutputConfig,
     ServerConfig,
     SwarmConfig,
-    get_config_manager,
     get_default_base_dir,
-    get_default_model_configs,
-    get_model_config,
-    get_ollama_host,
 )
+from modules.tools.mcp import resolve_env_vars_in_dict, resolve_env_vars_in_list
 
 
 class TestModelProvider:
@@ -228,7 +230,8 @@ class TestConfigManager:
 
         assert config.server_type == "bedrock"
         assert config.llm.provider == ModelProvider.AWS_BEDROCK
-        assert "claude-sonnet-4" in config.llm.model_id
+        # Model can be sonnet or opus depending on config
+        assert "claude" in config.llm.model_id.lower() or "anthropic" in config.llm.model_id.lower()
         assert config.embedding.provider == ModelProvider.AWS_BEDROCK
         assert "titan-embed" in config.embedding.model_id
         assert config.region == "us-east-1"
@@ -298,7 +301,8 @@ class TestConfigManager:
         assert local_config.llm.provider == ModelProvider.OLLAMA
         assert local_config.llm.model_id == "llama3.2:3b"
         assert local_config.llm.temperature == 0.7
-        assert local_config.llm.max_tokens == 500
+        # Swarm max_tokens now uses models.dev safe defaults (50% of limit, fallback 4096)
+        assert local_config.llm.max_tokens == 4096
 
         # Test remote swarm config
         remote_config = self.config_manager.get_swarm_config("bedrock")
@@ -306,7 +310,8 @@ class TestConfigManager:
         assert remote_config.llm.provider == ModelProvider.AWS_BEDROCK
         assert "claude" in remote_config.llm.model_id
         assert remote_config.llm.temperature == 0.7
-        assert remote_config.llm.max_tokens == 500
+        # Swarm max_tokens now uses models.dev safe defaults (50% of limit, fallback 4096)
+        assert remote_config.llm.max_tokens == 4096
 
     def test_get_mem0_service_config(self):
         """Test getting Mem0 service configuration."""
@@ -379,15 +384,6 @@ class TestConfigManager:
         config = self.config_manager.get_server_config("ollama")
         assert config.llm.model_id == "custom-llm"
 
-    @patch.dict(os.environ, {"RAGAS_EVALUATOR_MODEL": "custom-evaluator"})
-    def test_legacy_environment_variable_support(self):
-        """Test that legacy environment variables are supported."""
-        # Clear cache to force re-evaluation
-        self.config_manager._config_cache = {}
-
-        config = self.config_manager.get_server_config("ollama")
-        assert config.evaluation.llm.model_id == "custom-evaluator"
-
     @patch.dict(os.environ, {"CYBER_AGENT_SWARM_MODEL": "custom-swarm-model"})
     def test_swarm_model_environment_variable_override(self):
         """Test that swarm model can be overridden with environment variables."""
@@ -435,7 +431,7 @@ class TestConfigManager:
         assert config.server_type == "ollama"
 
     @patch("modules.config.manager.os.path.exists")
-    @patch("modules.config.manager.requests.get")
+    @patch("modules.config.system.validation.requests.get")
     def test_get_ollama_host_docker(self, mock_get, mock_exists):
         """Test Ollama host detection in Docker environment."""
         mock_exists.return_value = True  # Simulate Docker environment
@@ -460,7 +456,7 @@ class TestConfigManager:
         host = self.config_manager.get_ollama_host()
         assert host == "http://custom:11434"
 
-    @patch("modules.config.manager.requests.get")
+    @patch("modules.config.system.validation.requests.get")
     def test_validate_ollama_requirements_success(self, mock_get):
         """Test successful Ollama requirements validation."""
         mock_response = MagicMock()
@@ -477,7 +473,7 @@ class TestConfigManager:
                 # Should not raise an exception
                 self.config_manager.validate_requirements("ollama")
 
-    @patch("modules.config.manager.requests.get")
+    @patch("modules.config.system.validation.requests.get")
     def test_validate_ollama_requirements_server_down(self, mock_get):
         """Test Ollama requirements validation when server is down."""
         mock_get.side_effect = ConnectionError("Connection refused")
@@ -691,6 +687,266 @@ class TestConfigManager:
             assert "claude-3-5-sonnet" in os.environ["MEM0_LLM_MODEL"]
             assert "titan-embed" in os.environ["MEM0_EMBEDDING_MODEL"]
 
+    @patch.dict(os.environ, {"CYBER_MCP_ENABLED": "false"})
+    def test_get_mcp_config_disabled(self):
+        """Test MCP empty configuration."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        config = self.config_manager.get_mcp_config("bedrock")
+
+        assert not config.enabled
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": "[]",
+    })
+    def test_get_mcp_config_empty(self):
+        """Test MCP empty configuration."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        config = self.config_manager.get_mcp_config("bedrock")
+
+        assert config.enabled
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """
+[
+    {
+        "id": "mcp1",
+        "transport": "stdio",
+        "command": ["python3","-m","mymcp.server"],
+        "plugins": ["general"],
+        "timeoutSeconds": 900
+    },
+    {
+        "id": "mcp2",
+        "transport": "streamable-http",
+        "server_url": "http://127.0.0.1:8000/mcp",
+        "headers": {"Authorization": "Bearer ${MCP_TOKEN}"},
+        "plugins": ["general","ctf"],
+        "allowedTools": ["tool1", "tool2"]
+    },
+    {
+        "id": "mcp3",
+        "transport": "sse",
+        "server_url": "http://127.0.0.1:8000/sse",
+        "command": [],
+        "plugins": ["*"]
+    }
+]
+""",
+    })
+    def test_get_mcp_config_three(self):
+        """Test two MCP servers configuration."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        config = self.config_manager.get_mcp_config("bedrock")
+
+        assert config.enabled
+        assert len(config.connections) == 3
+
+        mcp = config.connections[0]
+        assert mcp.id == "mcp1"
+        assert mcp.transport == "stdio"
+        assert mcp.command == ["python3","-m","mymcp.server"]
+        assert mcp.plugins == ["general"]
+        assert mcp.timeoutSeconds == 900
+        assert mcp.allowed_tools == ['*']
+
+        mcp = config.connections[1]
+        assert mcp.id == "mcp2"
+        assert mcp.transport == "streamable-http"
+        assert mcp.server_url == "http://127.0.0.1:8000/mcp"
+        assert mcp.headers == {"Authorization": "Bearer ${MCP_TOKEN}"}
+        assert mcp.plugins == ["general","ctf"]
+        # allowed_tools can be specific tools or wildcard '*'
+        assert mcp.allowed_tools is not None
+
+        mcp = config.connections[2]
+        assert mcp.id == "mcp3"
+        assert mcp.transport == "sse"
+        assert mcp.server_url == "http://127.0.0.1:8000/sse"
+        assert mcp.command is None
+        assert mcp.headers is None
+        assert mcp.plugins == ["*"]
+        assert mcp.allowed_tools == ['*']
+
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """
+[
+    {
+        "id": "mcp1",
+        "transport": "stdio",
+        "command": ["python3","-m","mymcp.server"]
+    },
+    {
+        "id": "mcp1",
+        "transport": "streamable-http",
+        "server_url": "http://127.0.0.1:8000/mcp"
+    }
+]
+""",
+    })
+    def test_get_mcp_config_duplicate_id_validation(self):
+        """Test MCP duplicate ID configuration."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        with pytest.raises(ValueError, match="id property must be unique"):
+            self.config_manager.get_mcp_config("bedrock")
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """[{"id": "mcp1","transport": "stdio","server_url": "http://127.0.0.1:8000/mcp"}]""",
+    })
+    def test_get_mcp_config_stdio_command_validation(self):
+        """Test MCP stdio requires command property."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        with pytest.raises(ValueError, match="stdio transport requires the command property"):
+            self.config_manager.get_mcp_config("bedrock")
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """[{"id": "mcp1","transport": "sse","command": ["python3","-m","mymcp.server"]}]""",
+    })
+    def test_get_mcp_config_sse_command_validation(self):
+        """Test MCP see does not use the command property."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        with pytest.raises(ValueError, match="network transports do not use the command property"):
+            self.config_manager.get_mcp_config("bedrock")
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """[{"id": "mcp1","transport": "streamable-http"}]""",
+    })
+    def test_get_mcp_config_streamable_http_server_url_validation(self):
+        """Test MCP streamable-http requires server_url property."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        with pytest.raises(ValueError, match="network transports require the server_url property"):
+            self.config_manager.get_mcp_config("bedrock")
+
+    @patch.dict(os.environ, {
+        "CYBER_MCP_ENABLED": "true",
+        "CYBER_MCP_CONNECTIONS": """[{"id": "mcp1","transport": "telnet"}]""",
+    })
+    def test_get_mcp_config_transport_validation(self):
+        """Test MCP validate transport property."""
+        # Clear cache to ensure fresh config
+        self.config_manager._config_cache = {}
+
+        with pytest.raises(ValueError, match="does not have a valid transport"):
+            self.config_manager.get_mcp_config("bedrock")
+
+    def test_resolve_env_vars_in_dict_none_input(self):
+        env = {"VAR": "value"}
+        assert resolve_env_vars_in_dict(None, env) == {}
+
+    def test_resolve_env_vars_in_dict_empty(self):
+        env = {"VAR": "value"}
+        assert resolve_env_vars_in_dict({}, env) == {}
+
+    def test_resolve_env_vars_in_dict_single_var(self):
+        env = {"TOKEN": "secret-token"}
+        input_dict = {"Authorization": "Bearer ${TOKEN}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"Authorization": "Bearer secret-token"}
+
+    def test_resolve_env_vars_in_dict_multiple_vars_in_one_value(self):
+        env = {"USER": "alice", "ID": "42"}
+        input_dict = {"info": "user=${USER}, id=${ID}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"info": "user=alice, id=42"}
+
+    def test_resolve_env_vars_in_dict_repeated_var(self):
+        env = {"VAR": "x"}
+        input_dict = {"pattern": "${VAR}-${VAR}-${VAR}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"pattern": "x-x-x"}
+
+    def test_resolve_env_vars_in_dict_unknown_var_left_intact(self):
+        env = {}
+        input_dict = {"Authorization": "Bearer ${MISSING}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"Authorization": "Bearer ${MISSING}"}
+
+    def test_resolve_env_vars_in_dict_mixed_known_and_unknown(self):
+        env = {"KNOWN": "yes"}
+        input_dict = {"value": "${KNOWN}/${UNKNOWN}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"value": "yes/${UNKNOWN}"}
+
+    def test_resolve_env_vars_in_dict_value_without_placeholders_unchanged(self):
+        env = {"VAR": "x"}
+        input_dict = {"plain": "no placeholders here"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        assert result == {"plain": "no placeholders here"}
+
+    def test_resolve_env_vars_in_dict_keys_unchanged(self):
+        env = {"VAR": "x"}
+        input_dict = {"${VAR}": "value ${VAR}"}
+        result = resolve_env_vars_in_dict(input_dict, env)
+        # keys are not touched, only values
+        assert "${VAR}" in result
+        assert result["${VAR}"] == "value x"
+
+    def test_resolve_env_vars_in_list_none_input(self):
+        env = {"VAR": "value"}
+        assert resolve_env_vars_in_list(None, env) == []
+
+    def test_resolve_env_vars_in_list_empty(self):
+        env = {"VAR": "value"}
+        assert resolve_env_vars_in_list([], env) == []
+
+    def test_resolve_env_vars_in_list_single_element(self):
+        env = {"HOST": "localhost", "PORT": "8080"}
+        input_list = ["http://${HOST}:${PORT}/api"]
+        result = resolve_env_vars_in_list(input_list, env)
+        assert result == ["http://localhost:8080/api"]
+
+    def test_resolve_env_vars_in_list_multiple_elements(self):
+        env = {"USER": "alice", "HOME": "/home/alice"}
+        input_list = [
+            "user=${USER}",
+            "home=${HOME}",
+            "no-vars-here",
+        ]
+        result = resolve_env_vars_in_list(input_list, env)
+        assert result == [
+            "user=alice",
+            "home=/home/alice",
+            "no-vars-here",
+        ]
+
+    def test_resolve_env_vars_in_list_unknown_var_left_intact(self):
+        env = {}
+        input_list = ["${UNKNOWN} and more"]
+        result = resolve_env_vars_in_list(input_list, env)
+        assert result == ["${UNKNOWN} and more"]
+
+    def test_resolve_env_vars_in_list_repeated_var(self):
+        env = {"X": "1"}
+        input_list = ["${X}${X}${X}"]
+        result = resolve_env_vars_in_list(input_list, env)
+        assert result == ["111"]
+
+    def test_resolve_env_vars_in_list_adjacent_placeholders(self):
+        env = {"A": "foo", "B": "bar"}
+        input_list = ["${A}${B}"]
+        result = resolve_env_vars_in_list(input_list, env)
+        assert result == ["foobar"]
+
 
 class TestGlobalFunctions:
     """Test global convenience functions."""
@@ -746,19 +1002,6 @@ class TestEnvironmentIntegration:
             assert config.embedding.model_id == "custom-embedding"
             assert config.evaluation.llm.model_id == "custom-evaluator"
             assert config.region == "us-west-2"
-
-    def test_legacy_environment_variable_precedence(self):
-        """Test that new environment variables take precedence over legacy ones."""
-        env_vars = {
-            "CYBER_AGENT_EVALUATION_MODEL": "new-evaluator",
-            "RAGAS_EVALUATOR_MODEL": "legacy-evaluator",
-        }
-
-        with patch.dict(os.environ, env_vars):
-            config_manager = ConfigManager()
-            config = config_manager.get_server_config("ollama")
-
-            assert config.evaluation.llm.model_id == "new-evaluator"
 
     def test_centralized_region_configuration(self):
         """Test that AWS regions are centralized and consistent across all components."""

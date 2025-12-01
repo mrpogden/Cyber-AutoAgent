@@ -709,15 +709,22 @@ export class PythonExecutionService extends EventEmitter {
           OPENAI_API_VERSION: config.azureApiVersion 
         } : {}),
         ...(config.embeddingModel ? { CYBER_AGENT_EMBEDDING_MODEL: config.embeddingModel } : {}),
-        ...(config.maxTokens ? { MAX_TOKENS: String(config.maxTokens), CYBER_AGENT_MAX_TOKENS: String(config.maxTokens) } : {}),
+        ...(config.maxTokens ? { MAX_TOKENS: String(config.maxTokens) } : {}),
         ...(config.temperature !== undefined ? { CYBER_AGENT_TEMPERATURE: String(config.temperature) } : {}),
         ...(config.topP !== undefined ? { CYBER_AGENT_TOP_P: String(config.topP) } : {}),
         ...(config.thinkingBudget ? { THINKING_BUDGET: String(config.thinkingBudget) } : {}),
         ...(config.reasoningEffort ? { REASONING_EFFORT: config.reasoningEffort } : {}),
+        ...(config.reasoningVerbosity ? { REASONING_VERBOSITY: config.reasoningVerbosity } : {}),
         ...(config.maxCompletionTokens ? { MAX_COMPLETION_TOKENS: String(config.maxCompletionTokens) } : {}),
         // Model Configuration - pass separate models from config
         ...(config.swarmModel ? { CYBER_AGENT_SWARM_MODEL: config.swarmModel } : {}),
         ...(config.evaluationModel ? { CYBER_AGENT_EVALUATION_MODEL: config.evaluationModel } : {}),
+        // Context Management - conversation budget settings
+        ...(config.conversationWindow !== undefined ? { CYBER_CONVERSATION_WINDOW: String(config.conversationWindow) } : {}),
+        ...(config.conversationPreserveFirst !== undefined ? { CYBER_CONVERSATION_PRESERVE_FIRST: String(config.conversationPreserveFirst) } : {}),
+        ...(config.conversationPreserveLast !== undefined ? { CYBER_CONVERSATION_PRESERVE_LAST: String(config.conversationPreserveLast) } : {}),
+        ...(config.toolMaxResultChars !== undefined ? { CYBER_TOOL_MAX_RESULT_CHARS: String(config.toolMaxResultChars) } : {}),
+        ...(config.toolArtifactThreshold !== undefined ? { CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD: String(config.toolArtifactThreshold) } : {}),
         // Observability settings from config (matching Docker service behavior)
         ENABLE_OBSERVABILITY: config.observability ? 'true' : 'false',
         ENABLE_AUTO_EVALUATION: config.autoEvaluation ? 'true' : 'false',

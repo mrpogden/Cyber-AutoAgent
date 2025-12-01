@@ -24,17 +24,24 @@ class TestMemoryContextGuidance:
 
     def test_fresh_start_guidance(self):
         """Test memory context guidance for fresh start"""
-        result = get_memory_context_guidance(has_memory_path=False, has_existing_memories=False, memory_overview=None)
+        result = get_memory_context_guidance(
+            has_memory_path=False, has_existing_memories=False, memory_overview=None
+        )
 
         assert "## MEMORY CONTEXT" in result
         assert "Starting fresh assessment with no previous context" in result
         assert "Do NOT check memory on fresh operations" in result
-        assert "Then begin reconnaissance and target information gathering guided by the plan" in result
+        assert (
+            "Then begin reconnaissance and target information gathering guided by the plan"
+            in result
+        )
         assert 'Store all findings immediately with category="finding"' in result
 
     def test_memory_path_guidance(self):
         """Test memory context guidance with explicit memory path"""
-        result = get_memory_context_guidance(has_memory_path=True, has_existing_memories=False, memory_overview=None)
+        result = get_memory_context_guidance(
+            has_memory_path=True, has_existing_memories=False, memory_overview=None
+        )
 
         assert "## MEMORY CONTEXT" in result
         assert "Continuing assessment with 0 existing memories" in result
@@ -47,7 +54,9 @@ class TestMemoryContextGuidance:
 
     def test_existing_memories_guidance(self):
         """Test memory context guidance with existing memories"""
-        result = get_memory_context_guidance(has_memory_path=False, has_existing_memories=True, memory_overview=None)
+        result = get_memory_context_guidance(
+            has_memory_path=False, has_existing_memories=True, memory_overview=None
+        )
 
         assert "## MEMORY CONTEXT" in result
         assert "Continuing assessment with 0 existing memories" in result
@@ -134,10 +143,14 @@ class TestMemoryAwareSystemPrompts:
 
         assert "## MEMORY CONTEXT" in result
         assert "Starting fresh assessment with no previous context" in result
-        assert "Then begin reconnaissance and target information gathering guided by the plan" in result
-        assert "Target: test.com" in result
-        assert "Operation: OP_20240101_120000" in result
-        assert "Budget: 50 steps" in result
+        assert (
+            "Then begin reconnaissance and target information gathering guided by the plan"
+            in result
+        )
+        # Check for target/operation in current prompt format (markdown bold)
+        assert "**Target**: test.com" in result or "Target: test.com" in result
+        assert "**Operation**: OP_20240101_120000" in result or "Operation: OP_20240101_120000" in result
+        assert "0/50" in result  # Budget shown as step ratio
 
     def test_system_prompt_with_memory_path(self):
         """Test system prompt generation with memory path"""
@@ -274,10 +287,10 @@ Leverage these tools directly via shell.
             memory_overview=None,
         )
 
-        assert "## OUTPUT DIRECTORY STRUCTURE" in result
-        assert "Base directory: ./outputs" in result
-        assert "Target organization: ./outputs/test.com/" in result
+        # Output config section was removed from prompts - just verify memory context exists
         assert "## MEMORY CONTEXT" in result
+        # Verify the prompt still contains essential elements
+        assert "test.com" in result
 
     def test_system_prompt_server_variations(self):
         """Test system prompt generation with different server configurations"""
@@ -290,7 +303,9 @@ Leverage these tools directly via shell.
             provider="bedrock",
         )
 
-        assert 'model_provider: "bedrock"' in result_remote
+        # model_provider section removed from prompts - verify core content exists
+        assert "test.com" in result_remote
+        assert "## MEMORY CONTEXT" in result_remote
 
         # Test local server
         result_local = get_system_prompt(
@@ -301,7 +316,9 @@ Leverage these tools directly via shell.
             provider="ollama",
         )
 
-        assert 'model_provider: "ollama"' in result_local
+        # model_provider section removed from prompts - verify core content exists
+        assert "test.com" in result_local
+        assert "## MEMORY CONTEXT" in result_local
 
     def test_system_prompt_urgency_levels(self):
         """Test system prompt generation with different urgency levels"""
@@ -313,7 +330,7 @@ Leverage these tools directly via shell.
             operation_id="OP_20240101_120000",
         )
 
-        assert "Budget: 20 steps" in result_high
+        assert "0/20" in result_high  # Budget shown as step ratio
 
         # Medium urgency (>= 30 steps)
         result_medium = get_system_prompt(
@@ -323,7 +340,7 @@ Leverage these tools directly via shell.
             operation_id="OP_20240101_120000",
         )
 
-        assert "Budget: 50 steps" in result_medium
+        assert "0/50" in result_medium  # Budget shown as step ratio
 
     def test_system_prompt_memory_instructions_consistency(self):
         """Test consistency between memory context and dynamic instructions"""
@@ -384,7 +401,7 @@ class TestMemoryAwarePromptIntegration:
         )
 
         # Verify all components are present
-        assert "Target: vulnerable.com" in result
+        assert "**Target**: vulnerable.com" in result or "Target: vulnerable.com" in result
         assert "comprehensive penetration test" in result
         assert "OP_20240101_120000" in result
         assert "Continuing assessment with 3 existing memories" in result

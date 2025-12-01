@@ -77,12 +77,26 @@ Thanks to everyone who contributed, tested, and supported this experiment. Keep 
 
 The React-based terminal interface is now the **default UI**, providing interactive configuration, real-time operation monitoring, and guided setup in all deployment modes.
 
+### Quick Install via pip
+
+```bash
+# Install from PyPI
+pip install caa
+
+# Run the CLI
+caa --help
+caa --target "http://example.com" --objective "Security assessment"
+```
+
 ### Local Development - Recommended
 
 ```bash
 # Clone and setup
 git clone https://github.com/westonbrown/Cyber-AutoAgent.git
 cd Cyber-AutoAgent
+
+# Install in editable mode
+pip install -e .
 
 # Build React terminal interface
 cd src/modules/interfaces/react
@@ -107,26 +121,42 @@ The React terminal will automatically spawn the Python agent as a subprocess and
 
 #### Single Container
 
+**Interactive Mode (React Terminal UI):**
 ```bash
-# Interactive mode with React terminal
 docker run -it --rm \
-  -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
-  -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
-  -e AWS_REGION=${AWS_REGION:-us-east-1} \
+  -e AZURE_API_KEY=your_azure_key \
+  -e AZURE_API_BASE=https://your-endpoint.openai.azure.com/ \
+  -e AZURE_API_VERSION=2024-12-01-preview \
+  -e CYBER_AGENT_LLM_MODEL=azure/gpt-5 \
+  -e CYBER_AGENT_EMBEDDING_MODEL=azure/text-embedding-3-large \
   -v $(pwd)/outputs:/app/outputs \
-  cyber-autoagent
+  cyberautoagent:latest
+```
 
-# Or start directly with parameters
-docker run -it --rm \
-  -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
-  -e AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
-  -e AWS_REGION=${AWS_REGION:-us-east-1} \
+**Direct Python Execution (Non-Interactive):**
+```bash
+# Override entrypoint for direct Python execution
+docker run --rm --entrypoint python \
+  -e AZURE_API_KEY=your_azure_key \
+  -e AZURE_API_BASE=https://your-endpoint.openai.azure.com/ \
+  -e AZURE_API_VERSION=2024-12-01-preview \
+  -e CYBER_AGENT_LLM_MODEL=azure/gpt-5 \
+  -e CYBER_AGENT_EMBEDDING_MODEL=azure/text-embedding-3-large \
+  -e REASONING_EFFORT=medium \
   -v $(pwd)/outputs:/app/outputs \
-  cyber-autoagent \
+  cyberautoagent:latest \
+  src/cyberautoagent.py \
   --target "http://testphp.vulnweb.com" \
   --objective "Identify SQL injection vulnerabilities" \
-  --auto-run
+  --iterations 50 \
+  --provider litellm
 ```
+
+**Works with any LiteLLM provider (300+ supported):**
+- Azure OpenAI: `azure/model-name`
+- AWS Bedrock: Use AWS credentials instead
+- OpenRouter: Set `OPENROUTER_API_KEY`, use `openrouter/model-name`
+- Moonshot AI: Set `MOONSHOT_API_KEY`, use `moonshot/model-name`
 
 #### Docker Compose (Full Stack with Observability)
 
@@ -177,6 +207,7 @@ The compose stack automatically provides:
 
 - **Autonomous Operation**: Conducts security assessments with minimal human intervention
 - **Intelligent Tool Selection**: Automatically chooses appropriate security tools (nmap, sqlmap, nikto, etc.)
+- **Model Context Protocol (MCP)**: MCP support for local and remote, fine-grained tool selection
 - **Natural Language Reasoning**: Uses Strands framework with metacognitive architecture
 - **Evidence Collection**: Automatically stores findings with Mem0 memory (category="finding")
 - **Meta-Tool Creation**: Dynamically creates custom exploitation tools when needed
@@ -429,7 +460,7 @@ export ENABLE_AUTO_EVALUATION=true
 | `ENABLE_OBSERVABILITY` | `true` | Enable/disable Langfuse tracing |
 | `ENABLE_AUTO_EVALUATION` | `false` | Enable automatic Ragas evaluation |
 | `LANGFUSE_HOST` | `http://langfuse-web:3000` | Langfuse server URL |
-| `RAGAS_EVALUATOR_MODEL` | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Model for evaluation |
+| `CYBER_AGENT_EVALUATION_MODEL` | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Model for evaluation |
 
 ### Evaluation Metrics
 
@@ -623,6 +654,8 @@ The unified structure organizes all artifacts under operation-specific directori
 - `--memory-mode`: Memory initialization mode - `auto` (loads existing) or `fresh` (starts new), default: auto
 - `--keep-memory`: Keep memory data after operation completes (default: true)
 - `--output-dir`: Custom output directory (default: ./outputs)
+- `--mcp-enabled`: Enable MCP tools
+- `--mcp-conns`: Provide JSON of MCP server, the same `mcp.connections` block present in the configuration file 
 
 ### Usage Examples
 
@@ -659,6 +692,15 @@ docker run --rm \
   --target "http://testphp.vulnweb.com" \
   --objective "Comprehensive SQL injection and XSS assessment" \
   --iterations 25
+
+# Using MCP
+python src/cyberautoagent.py \
+  --target "http://testphp.vulnweb.com" \
+  --objective "Find SQL injection vulnerabilities" \
+  --provider bedrock \
+  --iterations 50 \
+  --mcp-enabled \
+  --map-conns '[{"id":"mcp1","transport":"stdio","command":["python","-m","mymcp.server"]}]'
 ```
 
 ## Security

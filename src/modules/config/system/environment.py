@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 import threading
 from datetime import datetime
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import List
 
 from modules.handlers.utils import print_status
+from modules.config.system.logger import get_logger, initialize_logger_factory
 
 
 def clean_operation_memory(operation_id: str, target_name: str = None):
@@ -22,7 +22,7 @@ def clean_operation_memory(operation_id: str, target_name: str = None):
         operation_id: The operation identifier
         target_name: The sanitized target name (optional, for unified output structure)
     """
-    logger = logging.getLogger(__name__)
+    logger = get_logger("Config.Environment")
     logger.debug(
         "clean_operation_memory called with operation_id=%s, target_name=%s",
         operation_id,
@@ -34,7 +34,9 @@ def clean_operation_memory(operation_id: str, target_name: str = None):
         return
 
     # Unified output structure - per-target memory
-    memory_path = os.path.join("outputs", target_name, "memory", f"mem0_faiss_{target_name}")
+    memory_path = os.path.join(
+        "outputs", target_name, "memory", f"mem0_faiss_{target_name}"
+    )
     logger.debug("Checking memory path: %s", memory_path)
 
     if os.path.exists(memory_path):
@@ -74,14 +76,19 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
         if tools_path.exists():
             if not tools_path.is_dir():
                 # If 'tools' exists but is not a directory, remove it and create directory
-                print_status("Removing existing 'tools' file to create directory", "WARNING")
+                print_status(
+                    "Removing existing 'tools' file to create directory", "WARNING"
+                )
                 tools_path.unlink()
                 tools_path.mkdir(exist_ok=True)
         else:
             tools_path.mkdir(exist_ok=True)  # Local tools directory for custom tools
     except PermissionError:
         # If we can't access or create the tools directory, continue without it
-        print_status("Cannot create/access 'tools' directory - continuing without custom tools", "WARNING")
+        print_status(
+            "Cannot create/access 'tools' directory - continuing without custom tools",
+            "WARNING",
+        )
     except Exception as e:
         # Log any other issues but continue
         print_status(f"Issue with tools directory: {e} - continuing", "WARNING")
@@ -177,6 +184,54 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
         "netcat": "Network utility for reading/writing data",
         "curl": "HTTP client for web requests",
         "tcpdump": "Network packet capture",
+        # Binary Exploitation & Reversing
+        "gdb": "GNU Debugger",
+        "ltrace": "Library call tracer",
+        "strace": "System call tracer",
+        "radare2": "Reverse engineering framework",
+        "ropgadget": "ROP gadget finder",
+        "ropper": "ROP gadget finder and binary information",
+        # Steganography & Forensics
+        "steghide": "Steganography tool",
+        "binwalk": "Firmware analysis tool",
+        "foremost": "File carving tool",
+        "zsteg": "PNG/BMP steganography",
+        # Deserialization
+        "ysoserial": "Java deserialization payload generator",
+        "phpggc": "PHP generic gadget chains",
+        # SSRF
+        "gopherus": "SSRF payload generator",
+        # Tunneling & OOB
+        # Tunneling & OOB
+        "interactsh-client": "OOB interaction client",
+        "ligolo-proxy": "Advanced tunneling tool (Ligolo-ng)",
+        "chisel": "Fast TCP/UDP tunnel over HTTP",
+        # Password Cracking
+        "hashcat": "Advanced password recovery",
+        "kerbrute": "Kerberos pre-auth brute-forcing",
+        # Windows/AD
+        "enum4linux": "SMB enumeration tool",
+        "netexec": "Network service exploitation (SMB/WinRM/etc)",
+        "evil-winrm": "WinRM shell access",
+        # XSS Advanced
+        "xsstrike": "Advanced XSS detection suite",
+        "dalfox": "Parameter analysis and XSS scanning",
+        # Privilege Escalation
+        "linpeas": "Linux Privilege Escalation Awesome Script",
+        "pwncat-cs": "Advanced reverse shell handler",
+        # C2 & Post-Exploitation
+        "sliver": "Command and Control framework",
+        # Active Directory Advanced
+        "bloodhound-python": "AD ingestor for BloodHound",
+        "certipy": "Active Directory Certificate Services abuse",
+        "coercer": "Active Directory coercion attacks",
+        "responder": "LLMNR/NBT-NS poisoner",
+        # Secrets & Git
+        "trufflehog": "Find leaked credentials",
+        "gitdumper": "Dump git repositories from websites",
+        # Cryptography & Forensics
+        "rsactftool": "RSA attack tool",
+        "volatility": "Memory forensics framework",
     }
 
     # Map tool names to their checkable binary names
@@ -195,6 +250,35 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
         "jwt-decode": "jwt-decode",
         "tplmap": "tplmap",
         "cookiecutter": "cookiecutter",
+        # Deserialization wrappers
+        "ysoserial": "ysoserial",
+        "phpggc": "phpggc",
+        "gopherus": "gopherus",
+        # Tunneling
+        "ligolo-proxy": "ligolo-proxy",
+        "chisel": "chisel",
+        # Windows/AD
+        "netexec": "nxc",  # NetExec binary is 'nxc'
+        "evil-winrm": "evil-winrm",
+        "kerbrute": "kerbrute",
+        "bloodhound-python": "bloodhound-python",
+        "certipy": "certipy",
+        "coercer": "coercer",
+        "responder": "responder",
+        # XSS
+        "xsstrike": "xsstrike",
+        "dalfox": "dalfox",
+        # PrivEsc
+        "linpeas": "linpeas",
+        "pwncat-cs": "pwncat-cs",
+        # C2
+        "sliver": "sliver",
+        # Secrets
+        "trufflehog": "trufflehog",
+        "gitdumper": "gitdumper",
+        # Crypto/Forensics
+        "rsactftool": "rsactftool",
+        "volatility": "vol",
     }
 
     available_tools = []
@@ -221,7 +305,9 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
             }
             print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
         else:
-            print_status(f"○ {tool_name:<12} - {description} (not available)", "WARNING")
+            print_status(
+                f"○ {tool_name:<12} - {description} (not available)", "WARNING"
+            )
 
             # Emit structured event for React UI
             tool_event = {
@@ -235,7 +321,9 @@ def auto_setup(skip_mem0_cleanup: bool = False) -> List[str]:
             }
             print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
 
-    print_status(f"Environment ready. {len(available_tools)} cyber tools available.", "SUCCESS")
+    print_status(
+        f"Environment ready. {len(available_tools)} cyber tools available.", "SUCCESS"
+    )
 
     # Emit environment ready event
     env_ready_event = {
@@ -337,7 +425,9 @@ def setup_logging(log_file: str = "cyber_operations.log", verbose: bool = False)
     # Create header in log file
     with open(log_file, "a", encoding="utf-8") as f:
         f.write("\n" + "=" * 80 + "\n")
-        f.write(f"CYBER-AUTOAGENT SESSION STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(
+            f"CYBER-AUTOAGENT SESSION STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        )
         f.write("=" * 80 + "\n\n")
 
     # Set up stdout and stderr redirection to capture ALL terminal output
@@ -355,12 +445,18 @@ def setup_logging(log_file: str = "cyber_operations.log", verbose: bool = False)
 
     atexit.register(cleanup_tee_outputs)
 
+    # Initialize the logger factory with configuration
+    initialize_logger_factory(log_file=log_file, verbose=verbose)
+
     # Traditional logger setup for structured logging
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    formatter = logging.Formatter(
+        fmt="%(asctime)s - [%(name)s] - %(levelname)s - [%(threadName)s] - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     # File handler - log INFO and above to file
     file_handler = logging.FileHandler(log_file, mode="a")
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
     file_handler.setFormatter(formatter)
 
     # Console handler - only show warnings and above unless verbose
@@ -370,7 +466,7 @@ def setup_logging(log_file: str = "cyber_operations.log", verbose: bool = False)
 
     # Configure the logger specifically
     cyber_logger = logging.getLogger("CyberAutoAgent")
-    cyber_logger.setLevel(logging.INFO)
+    cyber_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     cyber_logger.addHandler(file_handler)
     if verbose:
         cyber_logger.addHandler(console_handler)
@@ -378,13 +474,15 @@ def setup_logging(log_file: str = "cyber_operations.log", verbose: bool = False)
 
     # Suppress Strands framework error logging for expected step limit termination
     strands_event_loop_logger = logging.getLogger("strands.event_loop.event_loop")
-    strands_event_loop_logger.setLevel(logging.CRITICAL)  # Only show critical errors, not our expected StopIteration
+    strands_event_loop_logger.setLevel(
+        logging.CRITICAL
+    )  # Only show critical errors, not our expected StopIteration
 
     # Capture all other loggers at INFO level to file
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
     root_file_handler = logging.FileHandler(log_file, mode="a")
-    root_file_handler.setLevel(logging.INFO)
+    root_file_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
     root_file_handler.setFormatter(formatter)
     root_logger.addHandler(root_file_handler)
 

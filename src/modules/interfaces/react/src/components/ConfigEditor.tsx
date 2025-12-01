@@ -21,15 +21,15 @@ interface ConfigEditorProps {
 
 type EditingField = {
   field: string;
-  type: 'text' | 'number' | 'boolean' | 'select';
-  options?: Array<{label: string; value: string}>;
+  type: 'text' | 'number' | 'boolean' | 'select' | 'multiselect';
+  options?: Array<{ label: string; value: string }>;
 } | null;
 
 interface ConfigField {
   key: string;
   label: string;
-  type: 'text' | 'number' | 'boolean' | 'select' | 'password';
-  options?: Array<{label: string; value: string}>;
+  type: 'text' | 'number' | 'boolean' | 'select' | 'password' | 'multiselect';
+  options?: Array<{ label: string; value: string }>;
   description?: string;
   section: string;
   required?: boolean;
@@ -42,10 +42,24 @@ interface ConfigSection {
   expanded: boolean;
 }
 
+// MCP constants
+const MCP_TRANSPORT_OPTIONS = [
+  { label: 'stdio', value: 'stdio' },
+  { label: 'sse', value: 'sse' },
+  { label: 'streamable-http', value: 'streamable-http' }
+] as const;
+
+const MCP_PLUGIN_OPTIONS = [
+  { label: '*', value: '*' },
+  { label: 'general', value: 'general' },
+  { label: 'ctf', value: 'ctf' }
+] as const;
+
 // Define all configuration fields with their metadata
 const CONFIG_FIELDS: ConfigField[] = [
   // Models - Primary configuration
-  { key: 'modelProvider', label: 'Model Provider', type: 'select', section: 'Models', required: true,
+  {
+    key: 'modelProvider', label: 'Model Provider', type: 'select', section: 'Models', required: true,
     options: [
       { label: 'AWS Bedrock', value: 'bedrock' },
       { label: 'Ollama (Local)', value: 'ollama' },
@@ -56,26 +70,40 @@ const CONFIG_FIELDS: ConfigField[] = [
   { key: 'embeddingModel', label: 'Embedding Model', type: 'text', section: 'Models' },
   { key: 'evaluationModel', label: 'Evaluation Model', type: 'text', section: 'Models' },
   { key: 'swarmModel', label: 'Swarm Model', type: 'text', section: 'Models' },
-  
+
   // Models - Credentials (shown in Models section based on provider)
   { key: 'awsAccessKeyId', label: 'AWS Access Key ID', type: 'password', section: 'Models' },
   { key: 'awsSecretAccessKey', label: 'AWS Secret Access Key', type: 'password', section: 'Models' },
   { key: 'awsBearerToken', label: 'AWS Bearer Token', type: 'password', section: 'Models' },
   { key: 'awsRegion', label: 'AWS Region', type: 'text', section: 'Models' },
-  { key: 'awsProfile', label: 'AWS Profile Name', type: 'text', section: 'Models',
-    description: 'Optional credential profile (supports LiteLLM Bedrock/SageMaker).' },
-  { key: 'awsRoleArn', label: 'AWS Role ARN', type: 'text', section: 'Models',
-    description: 'Assume this IAM role before invoking Bedrock/SageMaker endpoints.' },
-  { key: 'awsSessionName', label: 'AWS Role Session Name', type: 'text', section: 'Models',
-    description: 'Session name used when assuming the specified IAM role.' },
-  { key: 'awsWebIdentityTokenFile', label: 'AWS Web Identity Token File', type: 'text', section: 'Models',
-    description: 'Path to Web Identity token (IRSA / OIDC environments).' },
-  { key: 'awsStsEndpoint', label: 'AWS STS Endpoint', type: 'text', section: 'Models',
-    description: 'Custom STS endpoint for GovCloud or private regions.' },
-  { key: 'awsExternalId', label: 'AWS External ID', type: 'text', section: 'Models',
-    description: 'External ID for cross-account role assumptions.' },
-  { key: 'sagemakerBaseUrl', label: 'SageMaker Base URL Override', type: 'text', section: 'Models',
-    description: 'Override runtime URL for private/VPC SageMaker endpoints.' },
+  {
+    key: 'awsProfile', label: 'AWS Profile Name', type: 'text', section: 'Models',
+    description: 'Optional credential profile (supports LiteLLM Bedrock/SageMaker).'
+  },
+  {
+    key: 'awsRoleArn', label: 'AWS Role ARN', type: 'text', section: 'Models',
+    description: 'Assume this IAM role before invoking Bedrock/SageMaker endpoints.'
+  },
+  {
+    key: 'awsSessionName', label: 'AWS Role Session Name', type: 'text', section: 'Models',
+    description: 'Session name used when assuming the specified IAM role.'
+  },
+  {
+    key: 'awsWebIdentityTokenFile', label: 'AWS Web Identity Token File', type: 'text', section: 'Models',
+    description: 'Path to Web Identity token (IRSA / OIDC environments).'
+  },
+  {
+    key: 'awsStsEndpoint', label: 'AWS STS Endpoint', type: 'text', section: 'Models',
+    description: 'Custom STS endpoint for GovCloud or private regions.'
+  },
+  {
+    key: 'awsExternalId', label: 'AWS External ID', type: 'text', section: 'Models',
+    description: 'External ID for cross-account role assumptions.'
+  },
+  {
+    key: 'sagemakerBaseUrl', label: 'SageMaker Base URL Override', type: 'text', section: 'Models',
+    description: 'Override runtime URL for private/VPC SageMaker endpoints.'
+  },
   { key: 'ollamaHost', label: 'Ollama Host', type: 'text', section: 'Models' },
   { key: 'openaiApiKey', label: 'OpenAI API Key', type: 'password', section: 'Models' },
   { key: 'anthropicApiKey', label: 'Anthropic API Key', type: 'password', section: 'Models' },
@@ -85,15 +113,24 @@ const CONFIG_FIELDS: ConfigField[] = [
   { key: 'azureApiKey', label: 'Azure API Key', type: 'password', section: 'Models' },
   { key: 'azureApiBase', label: 'Azure API Base', type: 'text', section: 'Models' },
   { key: 'azureApiVersion', label: 'Azure API Version', type: 'text', section: 'Models' },
-  { key: 'temperature', label: 'Temperature (optional)', type: 'number', section: 'Models',
-    description: 'Sampling temperature (0.0-2.0). Leave as Auto for provider defaults.' },
-  { key: 'maxTokens', label: 'Max Output Tokens (optional)', type: 'number', section: 'Models',
-    description: 'Leave as Auto for provider/model defaults.' },
-  { key: 'topP', label: 'Top P (optional)', type: 'number', section: 'Models',
-    description: 'Nucleus sampling (0.0-1.0). Leave as Auto. Note: Anthropic requires temperature OR top_p, not both.' },
-  { key: 'thinkingBudget', label: 'Thinking Budget (optional)', type: 'number', section: 'Models',
-    description: 'Claude thinking models only. Leave as Auto for model defaults.' },
-  { key: 'reasoningEffort', label: 'Reasoning Effort (optional)', type: 'select', section: 'Models',
+  {
+    key: 'temperature', label: 'Temperature (optional)', type: 'number', section: 'Models',
+    description: 'Sampling temperature (0.0-2.0). Leave as Auto for provider defaults.'
+  },
+  {
+    key: 'maxTokens', label: 'Max Output Tokens (optional)', type: 'number', section: 'Models',
+    description: 'Leave as Auto for provider/model defaults.'
+  },
+  {
+    key: 'topP', label: 'Top P (optional)', type: 'number', section: 'Models',
+    description: 'Nucleus sampling (0.0-1.0). Leave as Auto. Note: Anthropic requires temperature OR top_p, not both.'
+  },
+  {
+    key: 'thinkingBudget', label: 'Thinking Budget (optional)', type: 'number', section: 'Models',
+    description: 'Claude thinking models only. Leave as Auto for model defaults.'
+  },
+  {
+    key: 'reasoningEffort', label: 'Reasoning Effort (optional)', type: 'select', section: 'Models',
     description: 'OpenAI O1/GPT-5 only. Leave as Auto for default.',
     options: [
       { label: 'Auto', value: '' },
@@ -102,8 +139,28 @@ const CONFIG_FIELDS: ConfigField[] = [
       { label: 'High', value: 'high' }
     ]
   },
-  { key: 'maxCompletionTokens', label: 'Max Completion Tokens (optional)', type: 'number', section: 'Models',
-    description: 'OpenAI O1/GPT-5 only. Leave as Auto for default.' },
+  {
+    key: 'maxCompletionTokens', label: 'Max Completion Tokens (optional)', type: 'number', section: 'Models',
+    description: 'OpenAI O1/GPT-5 only. Leave as Auto for default.'
+  },
+  {
+    key: 'bedrockEffort', label: 'Bedrock Effort Level (optional)', type: 'select', section: 'Models',
+    description: 'Claude Opus 4.5/Sonnet 4.5/Haiku 4.5 only. Controls quality vs speed tradeoff.',
+    options: [
+      { label: 'Auto (Model Default)', value: '' },
+      { label: 'Low (Faster)', value: 'low' },
+      { label: 'Medium (Balanced)', value: 'medium' },
+      { label: 'High (Thorough)', value: 'high' }
+    ]
+  },
+  {
+    key: 'enableToolSearch', label: 'Enable Tool Search (Beta)', type: 'boolean', section: 'Models',
+    description: 'Claude Opus 4.5+ only. Enables dynamic tool discovery during inference.'
+  },
+  {
+    key: 'enableToolExamples', label: 'Enable Tool Examples (Beta)', type: 'boolean', section: 'Models',
+    description: 'Claude Opus 4.5+ only. Provides tool usage examples in tool definitions.'
+  },
 
   // Operations (renamed from Assessment)
   { key: 'iterations', label: 'Max Iterations', type: 'number', section: 'Operations' },
@@ -111,9 +168,32 @@ const CONFIG_FIELDS: ConfigField[] = [
   { key: 'maxThreads', label: 'Max Threads', type: 'number', section: 'Operations' },
   { key: 'dockerTimeout', label: 'Docker Timeout (s)', type: 'number', section: 'Operations' },
   { key: 'verbose', label: 'Verbose Output', type: 'boolean', section: 'Operations' },
-  
+
+  // Context Management
+  {
+    key: 'conversationWindow', label: 'Conversation Window Size', type: 'number', section: 'Operations',
+    description: 'Max messages in sliding window (default: 100). Maps to CYBER_CONVERSATION_WINDOW.'
+  },
+  {
+    key: 'conversationPreserveFirst', label: 'Preserve First Messages', type: 'number', section: 'Operations',
+    description: 'Initial messages to preserve (default: 1). Maps to CYBER_CONVERSATION_PRESERVE_FIRST.'
+  },
+  {
+    key: 'conversationPreserveLast', label: 'Preserve Last Messages', type: 'number', section: 'Operations',
+    description: 'Recent messages to preserve; reduced from 12 to 5 to prevent pruning deadlock (default: 5). Maps to CYBER_CONVERSATION_PRESERVE_LAST.'
+  },
+  {
+    key: 'toolMaxResultChars', label: 'Tool Max Result Size (chars)', type: 'number', section: 'Operations',
+    description: 'Max tool output size before truncation (default: 30000). Maps to CYBER_TOOL_MAX_RESULT_CHARS.'
+  },
+  {
+    key: 'toolArtifactThreshold', label: 'Tool Artifact Threshold (chars)', type: 'number', section: 'Operations',
+    description: 'Tool output size to externalize to artifacts/ (default: 10000). Maps to CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD.'
+  },
+
   // Memory
-  { key: 'memoryBackend', label: 'Memory Backend', type: 'select', section: 'Memory',
+  {
+    key: 'memoryBackend', label: 'Memory Backend', type: 'select', section: 'Memory',
     options: [
       { label: 'FAISS (Local)', value: 'FAISS' },
       { label: 'Mem0 Platform', value: 'mem0' },
@@ -123,33 +203,42 @@ const CONFIG_FIELDS: ConfigField[] = [
   { key: 'keepMemory', label: 'Keep Memory After Operations', type: 'boolean', section: 'Memory' },
   { key: 'mem0ApiKey', label: 'Mem0 API Key', type: 'password', section: 'Memory' },
   { key: 'opensearchHost', label: 'OpenSearch Host', type: 'text', section: 'Memory' },
-  
+
   // Observability
-  { key: 'observability', label: 'Enable Remote Observability', type: 'boolean', section: 'Observability',
-    description: 'Export traces to Langfuse. Requires Langfuse infrastructure. Auto-detected based on deployment mode. Token counting always enabled.' },
+  {
+    key: 'observability', label: 'Enable Remote Observability', type: 'boolean', section: 'Observability',
+    description: 'Export traces to Langfuse. Requires Langfuse infrastructure. Auto-detected based on deployment mode. Token counting always enabled.'
+  },
   { key: 'langfuseHost', label: 'Langfuse Host', type: 'text', section: 'Observability' },
   { key: 'langfusePublicKey', label: 'Langfuse Public Key', type: 'password', section: 'Observability' },
   { key: 'langfuseSecretKey', label: 'Langfuse Secret Key', type: 'password', section: 'Observability' },
   { key: 'enableLangfusePrompts', label: 'Enable Prompt Management', type: 'boolean', section: 'Observability' },
-  
+
   // Evaluation
-  { key: 'autoEvaluation', label: 'Auto-Evaluation', type: 'boolean', section: 'Evaluation',
-    description: 'Requires Langfuse infrastructure for Ragas metrics. Auto-detected based on deployment mode.' },
+  {
+    key: 'autoEvaluation', label: 'Auto-Evaluation', type: 'boolean', section: 'Evaluation',
+    description: 'Requires Langfuse infrastructure for Ragas metrics. Auto-detected based on deployment mode.'
+  },
   { key: 'minToolAccuracyScore', label: 'Min Tool Accuracy', type: 'number', section: 'Evaluation' },
   { key: 'minEvidenceQualityScore', label: 'Min Evidence Quality', type: 'number', section: 'Evaluation' },
   { key: 'minAnswerRelevancyScore', label: 'Min Answer Relevancy', type: 'number', section: 'Evaluation' },
-  
+
   // Dynamic Pricing - Current Model pricing (populated based on active modelId)
-  { key: 'currentModel.inputCostPer1k', 
+  {
+    key: 'currentModel.inputCostPer1k',
     label: 'Current Model - Input Cost (per 1K tokens)', type: 'number', section: 'Pricing',
-    description: 'Cost per 1000 input tokens for your selected model' },
-  { key: 'currentModel.outputCostPer1k', 
+    description: 'Cost per 1000 input tokens for your selected model'
+  },
+  {
+    key: 'currentModel.outputCostPer1k',
     label: 'Current Model - Output Cost (per 1K tokens)', type: 'number', section: 'Pricing',
-    description: 'Cost per 1000 output tokens for your selected model' },
-  
+    description: 'Cost per 1000 output tokens for your selected model'
+  },
+
   // Output
   { key: 'outputDir', label: 'Output Directory', type: 'text', section: 'Output' },
-  { key: 'outputFormat', label: 'Output Format', type: 'select', section: 'Output',
+  {
+    key: 'outputFormat', label: 'Output Format', type: 'select', section: 'Output',
     options: [
       { label: 'Markdown', value: 'markdown' },
       { label: 'JSON', value: 'json' },
@@ -166,6 +255,7 @@ const SECTIONS: ConfigSection[] = [
   { name: 'Observability', label: 'Observability', description: 'Remote tracing (auto-detected, token counting always enabled)', expanded: false },
   { name: 'Evaluation', label: 'Evaluation', description: 'Quality assessment with Ragas (auto-detected)', expanded: false },
   { name: 'Pricing', label: 'Model Pricing', description: 'Token cost configuration per 1K tokens', expanded: false },
+  { name: 'MCP', label: 'MCP Servers', description: 'Model Context Protocol server connections', expanded: false },
   { name: 'Output', label: 'Output', description: 'Report and logging', expanded: false }
 ];
 
@@ -200,7 +290,7 @@ const getModelCapabilities = (modelId: string | undefined) => {
 export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
   const { config, updateConfig, saveConfig } = useConfig();
   const theme = themeManager.getCurrentTheme();
-  
+
   const [sections, setSections] = useState(SECTIONS);
   const [selectedSectionIndex, setSelectedSectionIndex] = useState(0);
   const [selectedFieldIndex, setSelectedFieldIndex] = useState(0);
@@ -210,22 +300,57 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [navigationMode, setNavigationMode] = useState<'sections' | 'fields'>('sections');
   const [lastEscTime, setLastEscTime] = useState<number | null>(null);
-  
+
   // Use ref to track timeout for cleanup
   const messageTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const messageIdRef = React.useRef(0);
   const messagePriorityRef = React.useRef(-1);
   const messageLockRef = React.useRef(0);
-  
+
   // Use ref for handleSave to avoid stale closure issues
   const handleSaveRef = React.useRef<(() => void) | undefined>(undefined);
-  
+
   // Use ref to protect message during saves
   const isSavingRef = React.useRef(false);
-  
+
+  // Ref for ESC to prevent navigation mode change when exiting edit mode
+  const justExitedViaEscRef = React.useRef(false);
+
+  // Track previous editingField to detect when we exit edit mode
+  const prevEditingFieldRef = React.useRef<typeof editingField>(null);
+  // Track which section was being edited (to avoid stale closure)
+  const editingSectionIdxRef = React.useRef<number>(0);
+
+  // Update the section index ref when entering edit mode
+  useEffect(() => {
+    if (editingField !== null) {
+      editingSectionIdxRef.current = selectedSectionIndex;
+    }
+  }, [editingField, selectedSectionIndex]);
+
+  // CRITICAL: Ensure section stays expanded when exiting edit mode
+  // This is a declarative safety net that runs AFTER all other state updates
+  useEffect(() => {
+    const wasEditing = prevEditingFieldRef.current !== null;
+    const nowNotEditing = editingField === null;
+
+    // If we just exited edit mode, force the section to stay expanded
+    if (wasEditing && nowNotEditing) {
+      const sectionToExpand = editingSectionIdxRef.current;
+      // Use setImmediate (or setTimeout as fallback) to ensure this runs after all other updates
+      const schedule = typeof setImmediate !== 'undefined' ? setImmediate : (fn: () => void) => setTimeout(fn, 0);
+      schedule(() => {
+        setSections(prev => prev.map((s, i) =>
+          i === sectionToExpand ? { ...s, expanded: true } : s
+        ));
+      });
+    }
+
+    prevEditingFieldRef.current = editingField;
+  }, [editingField]);
 
   // Screen clearing is handled by modal manager's refreshStatic()
-  
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -264,11 +389,299 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       }, ttl);
     }
   }, []);
-  
+
+  // ==== MCP state & helpers ====
+  const [selectedMcpIndex, setSelectedMcpIndex] = useState(0);
+  const [mcpTestStatus, setMcpTestStatus] = useState<Record<number, string>>({});
+
+  const normalizeTransport = (t: string | undefined) => (t || '').replace('_', '-');
+
+  // Ensure `config.mcp` exists with sane defaults
+  useEffect(() => {
+    if (!(config as any).mcp) {
+      updateConfig({ mcp: { enabled: false, connections: [] } });
+    } else {
+      // Normalize any legacy transport values
+      const mcp = (config as any).mcp;
+      if (Array.isArray(mcp?.connections)) {
+        let mutated = false;
+        const next = mcp.connections.map((c: any) => {
+          const nt = normalizeTransport(c.transport);
+          if (nt && nt !== c.transport) {
+            mutated = true;
+            return { ...c, transport: nt };
+          }
+          return c;
+        });
+        if (mutated) {
+          updateConfig({ mcp: { ...mcp, connections: next } });
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const getMcpConnections = () => (config as any).mcp?.connections ?? [];
+
+  const setMcpEnabled = (val: boolean) => {
+    const mcp = (config as any).mcp ?? { enabled: false, connections: [] };
+    updateConfig({ mcp: { ...mcp, enabled: val } });
+    setUnsavedChanges(true);
+  };
+
+  const addMcpConnection = () => {
+    const mcp = (config as any).mcp ?? { enabled: false, connections: [] };
+    const nextConnections = [...(mcp.connections ?? []), {
+      id: `conn-${(mcp.connections?.length ?? 0) + 1}`,
+      transport: 'stdio',
+      command: [],
+      plugins: ['general'],
+      timeoutSeconds: 300,
+      allowedTools: ['*'],
+    }];
+    updateConfig({ mcp: { ...mcp, connections: nextConnections } });
+    setSelectedMcpIndex(Math.max(0, nextConnections.length - 1));
+    setUnsavedChanges(true);
+    showMessage('Added new MCP connection', 'success', 2000);
+    // Keep MCP section expanded and stay in fields mode
+    setNavigationMode('fields');
+    setSections(prev => {
+      const copy = [...prev];
+      const idx = copy.findIndex(s => s.name === 'MCP');
+      if (idx !== -1) copy[idx] = { ...copy[idx], expanded: true };
+      return copy;
+    });
+  };
+
+  const removeMcpConnection = () => {
+    const mcp = (config as any).mcp ?? { enabled: false, connections: [] };
+    const conns = [...(mcp.connections ?? [])];
+    if (conns.length === 0) return;
+    conns.splice(selectedMcpIndex, 1);
+    const nextIdx = Math.max(0, selectedMcpIndex - 1);
+    updateConfig({ mcp: { ...mcp, connections: conns } });
+    setSelectedMcpIndex(nextIdx);
+    setUnsavedChanges(true);
+    showMessage('Removed MCP connection', 'success', 2000);
+    // Keep MCP section expanded and stay in fields mode
+    setNavigationMode('fields');
+    setSections(prev => {
+      const copy = [...prev];
+      const idx = copy.findIndex(s => s.name === 'MCP');
+      if (idx !== -1) copy[idx] = { ...copy[idx], expanded: true };
+      return copy;
+    });
+  };
+
+  const updateMcpConnection = (key: string, value: any) => {
+    const mcp = (config as any).mcp ?? { enabled: false, connections: [] };
+    const conns = [...(mcp.connections ?? [])];
+    if (!conns[selectedMcpIndex]) return;
+
+    const curr = { ...conns[selectedMcpIndex] };
+    if (key === 'transport') {
+      curr.transport = normalizeTransport(String(value));
+    } else if (key === 'plugins') {
+      curr.plugins = Array.isArray(value) ? value : [];
+    } else if (key === 'command') {
+      curr.command = value;
+    } else if (key === 'headers') {
+      curr.headers = value;
+    } else if (key === 'id') {
+      curr.id = String(value);
+    } else if (key === 'server_url') {
+      curr.server_url = String(value);
+    } else if (key === 'timeoutSeconds') {
+      curr.timeoutSeconds = Number(value);
+    } else {
+      (curr as any)[key] = value;
+    }
+
+    conns[selectedMcpIndex] = curr;
+    updateConfig({ mcp: { ...mcp, connections: conns } });
+    setUnsavedChanges(true);
+  };
+
+  const getSelectedMcp = () => getMcpConnections()[selectedMcpIndex];
+
+  const testMcpConnection = async () => {
+    // Keep section expanded & remain in fields mode
+    setNavigationMode('fields');
+    setSections(prev => prev.map((s, i) => {
+      const isMcp = s.name === 'MCP';
+      return isMcp ? { ...s, expanded: true } : s;
+    }));
+
+    const idx = selectedMcpIndex;
+    const conn = getSelectedMcp();
+    if (!conn) {
+      showMessage('No MCP connection selected', 'error', 3000);
+      setMcpTestStatus(prev => ({ ...prev, [idx]: 'No connection selected' }));
+      return;
+    }
+
+    const t = normalizeTransport(conn.transport);
+    if (t === 'stdio') {
+      showMessage('Test Connection: not applicable for stdio transport', 'info', 3000);
+      setMcpTestStatus(prev => ({ ...prev, [idx]: 'N/A for stdio' }));
+      return;
+    }
+
+    const baseUrl = conn.server_url;
+    if (!baseUrl) {
+      showMessage('server_url is required to test HTTP/SSE MCP servers', 'error', 4000);
+      setMcpTestStatus(prev => ({ ...prev, [idx]: 'Missing server_url' }));
+      return;
+    }
+
+    setMcpTestStatus(prev => ({ ...prev, [idx]: 'Testing…' }));
+
+    try {
+      const f: any = (globalThis as any).fetch;
+      if (!f) {
+        showMessage('Fetch API not available in this runtime', 'error', 4000);
+        setMcpTestStatus(prev => ({ ...prev, [idx]: 'Fetch API unavailable' }));
+        return;
+      }
+
+      // Build headers from connection config
+      const baseHeaders: Record<string, string> = {};
+      if (conn.headers && typeof conn.headers === 'object') {
+        for (const [k, v] of Object.entries(conn.headers)) {
+          if (typeof v === 'string') baseHeaders[k] = v;
+        }
+      }
+
+      // Helper: read small body snippet
+      const bodySnippet = async (resp: any) => {
+        try {
+          const text = await resp.text();
+          return text.length > 240 ? text.slice(0, 240) + '…' : text;
+        } catch {
+          return '';
+        }
+      };
+
+      // --- Strategy 1: SSE GET (negotiation)
+      const sseHeaders: Record<string, string> = { ...baseHeaders };
+      sseHeaders['Accept'] = 'text/event-stream';
+      sseHeaders['Cache-Control'] = 'no-cache';
+      sseHeaders['Connection'] = 'keep-alive';
+      if (t === 'streamable-http') {
+        // Some servers use this hint
+        sseHeaders['Mcp-Transport'] = 'streamable-http';
+      }
+
+      const sseCtl = new AbortController();
+      const sseTimeout = setTimeout(() => sseCtl.abort(), 3500);
+      let resp = await f(baseUrl, { method: 'GET', headers: sseHeaders, signal: sseCtl.signal });
+      clearTimeout(sseTimeout);
+
+      // Fallback to /stream path if server expects it
+      if (resp && (resp.status === 404 || resp.status === 400)) {
+        const altUrl = baseUrl.replace(/\/?$/, '/stream');
+        const altCtl = new AbortController();
+        const altTimeout = setTimeout(() => altCtl.abort(), 3500);
+        const altResp = await f(altUrl, { method: 'GET', headers: sseHeaders, signal: altCtl.signal });
+        clearTimeout(altTimeout);
+        if (altResp) resp = altResp;
+      }
+
+      if (resp && ((resp.status >= 200 && resp.status < 400) || resp.status === 406 || resp.status === 101)) {
+        showMessage(`Connection OK (${resp.status}, SSE)`, 'success', 3000);
+        setMcpTestStatus(prev => ({ ...prev, [idx]: `OK (${resp.status})` }));
+        return;
+      }
+
+      // If 406, we already presented Accept; proceed to JSON-RPC POST probe for streamable-http
+      const status1 = resp?.status ?? 'no-response';
+
+      // --- Strategy 2: JSON-RPC ping via POST (some streamable-http servers accept this)
+      const postHeaders: Record<string, string> = { ...baseHeaders };
+      postHeaders['Content-Type'] = 'application/json';
+      postHeaders['Accept'] = 'application/json';
+
+      const body = JSON.stringify({ jsonrpc: '2.0', id: 'health-check', method: 'ping' });
+
+      const postCtl = new AbortController();
+      const postTimeout = setTimeout(() => postCtl.abort(), 3500);
+      let postResp = await f(baseUrl, { method: 'POST', headers: postHeaders, body, signal: postCtl.signal });
+      clearTimeout(postTimeout);
+
+      // Fallback to /mcp for POST if baseUrl ends not in /mcp
+      if (postResp && (postResp.status === 404 || postResp.status === 400)) {
+        if (!/\/mcp\/?$/.test(baseUrl)) {
+          const alt = baseUrl.replace(/\/?$/, '/mcp');
+          const altCtl2 = new AbortController();
+          const altTimeout2 = setTimeout(() => altCtl2.abort(), 3500);
+          const altResp2 = await f(alt, { method: 'POST', headers: postHeaders, body, signal: altCtl2.signal });
+          clearTimeout(altTimeout2);
+          if (altResp2) postResp = altResp2;
+        }
+      }
+
+      if (postResp && ((postResp.status >= 200 && postResp.status < 400) || postResp.status === 406 || postResp.status === 101)) {
+        showMessage(`Connection OK (${postResp.status}, POST)`, 'success', 3000);
+        setMcpTestStatus(prev => ({ ...prev, [idx]: `OK (${postResp.status})` }));
+        return;
+      }
+
+      // If we got here, all strategies failed — show best diagnostic
+      const snippet = resp ? await bodySnippet(resp) : '';
+      const code = status1;
+      const note = snippet ? ` — ${snippet}` : '';
+      showMessage(`Connection FAILED (${code})${note}`, 'error', 7000);
+      setMcpTestStatus(prev => ({ ...prev, [idx]: `FAILED (${code})${snippet ? `: ${snippet}` : ''}` }));
+    } catch (e: any) {
+      const msg = e?.name === 'AbortError' ? 'timeout' : (e?.message || String(e));
+      showMessage(`Connection FAILED: ${msg}`, 'error', 6000);
+      setMcpTestStatus(prev => ({ ...prev, [idx]: `FAILED: ${msg}` }));
+    }
+  };
+
+  // Build pseudo fields for MCP so generic navigation works
+  const getMcpFields = (): ConfigField[] => {
+    const conns = getMcpConnections();
+    const conn = conns[selectedMcpIndex];
+    const idxLabel = conns.length === 0
+      ? 'Connection Index (0/0)'
+      : `Connection Index (${selectedMcpIndex + 1}/${conns.length})`;
+    const base: ConfigField[] = [
+      { key: 'mcp.enabled', label: 'MCP Enabled', type: 'boolean', section: 'MCP' },
+      { key: 'mcp.connectionIndex', label: idxLabel, type: 'number', section: 'MCP', description: 'Use ←/→ to switch connections' },
+    ];
+    if (!conn) {
+      return base;
+    }
+    return base.concat([
+      { key: 'mcp.conn.id', label: 'Connection ID', type: 'text', section: 'MCP', required: true },
+      { key: 'mcp.conn.transport', label: 'Transport', type: 'select', options: MCP_TRANSPORT_OPTIONS as any, section: 'MCP', required: true },
+      { key: 'mcp.conn.server_url', label: 'Server URL', type: 'text', section: 'MCP', description: 'Required for sse/streamable-http' },
+      { key: 'mcp.conn.command', label: 'Command (JSON array)', type: 'text', section: 'MCP', description: 'Example: ["python","-m","shyhurricane.server"]' },
+      { key: 'mcp.conn.headers', label: 'Headers (JSON)', type: 'text', section: 'MCP', description: 'Example: {"Authorization":"Bearer ${HTB_TOKEN}"}' },
+      { key: 'mcp.conn.plugins', label: 'Plugins', type: 'multiselect', section: 'MCP', options: MCP_PLUGIN_OPTIONS as any, description: "Select one or more. If '*' is selected it will be the only selection." },
+      { key: 'mcp.conn.allowedTools', label: 'Allowed Tools', type: 'multiselect', section: 'MCP', description: "Free-form list of tool names allowed for this connection. '*' allows all tools." },
+      { key: 'mcp.conn.timeoutSeconds', label: 'Timeout (seconds)', type: 'number', section: 'MCP' },
+      { key: 'mcp.conn.test', label: 'Test Connection', type: 'text', section: 'MCP', description: 'Press Enter to run HTTP check against server_url' },
+    ]);
+  };
+  // Ensure MCP section stays open while editing fields
+  useEffect(() => {
+    if (navigationMode !== 'fields') return;
+    setSections(prev => {
+      const curr = prev[selectedSectionIndex];
+      if (!curr || curr.name !== 'MCP' || curr.expanded) return prev;
+      const copy = [...prev];
+      copy[selectedSectionIndex] = { ...curr, expanded: true };
+      return copy;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigationMode, selectedSectionIndex, (config as any).mcp?.enabled, (config as any).mcp?.connections?.length]);
+  // ==== end MCP helpers ====
   // Auto-adjust observability and evaluation based on deployment mode
   useEffect(() => {
     const deploymentMode = config.deploymentMode;
-    
+
     // For local-cli and single-container, default to disabled
     if (deploymentMode === 'local-cli' || deploymentMode === 'single-container') {
       // Only update if not explicitly set by user (check if still at default true values)
@@ -283,11 +696,16 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
     }
     // For full-stack, these can remain enabled (user can still toggle)
   }, [config.deploymentMode, updateConfig, showMessage]);
-  
+
   // Get fields for the current section
   const getCurrentSectionFields = useCallback(() => {
     const currentSection = sections[selectedSectionIndex];
     if (!currentSection?.expanded) return [];
+
+    // MCP custom section uses generated fields so navigation works
+    if (currentSection.name === 'MCP') {
+      return getMcpFields();
+    }
 
     let fields = CONFIG_FIELDS.filter(f => f.section === currentSection.name);
 
@@ -314,7 +732,8 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           const bedrockFields = [
             'awsAccessKeyId', 'awsSecretAccessKey', 'awsBearerToken', 'awsRegion',
             'awsProfile', 'awsRoleArn', 'awsSessionName', 'awsWebIdentityTokenFile', 'awsStsEndpoint', 'awsExternalId',
-            'temperature', 'maxTokens', 'thinkingBudget'
+            'temperature', 'maxTokens', 'thinkingBudget', 'bedrockEffort',
+            'enableToolSearch', 'enableToolExamples'
           ];
           return bedrockFields.includes(f.key);
         } else if (config.modelProvider === 'ollama') {
@@ -337,7 +756,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         return false;
       });
     }
-    
+
     // Filter memory fields based on backend
     if (currentSection.name === 'Memory') {
       fields = fields.filter(f => {
@@ -347,10 +766,10 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         return false;
       });
     }
-    
+
     return fields;
   }, [sections, selectedSectionIndex, config.modelProvider, config.memoryBackend, config.modelId]);
-  
+
   // Basic pre-save validation for required fields and dependent settings
   const validateBeforeSave = useCallback(() => {
     // Required fields
@@ -398,26 +817,36 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       }
     })();
   }, [saveConfig, showMessage]);
-  
+
   // Store handleSave in ref to avoid stale closures
   React.useEffect(() => {
     handleSaveRef.current = handleSave;
   }, [handleSave]);
-  
+
   // Handle keyboard navigation
   useInput((input, key) => {
-    
+    // Clear ESC ref on any non-ESC key press (user has moved on)
+    if (!key.escape && justExitedViaEscRef.current) {
+      justExitedViaEscRef.current = false;
+    }
+
     if (editingField) {
-      // In edit mode
+      // In edit mode - only handle ESC here
       if (key.escape) {
         setEditingField(null);
         setTempValue('');
       }
       return;
     }
-    
+
     // Navigation mode
     if (key.escape) {
+      // Guard: If we just exited edit mode via ESC, don't change navigation mode
+      if (justExitedViaEscRef.current) {
+        justExitedViaEscRef.current = false;
+        return;
+      }
+
       if (navigationMode === 'fields') {
         // Go back to section navigation but KEEP section expanded
         setNavigationMode('sections');
@@ -437,7 +866,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         }
       }
     }
-    
+
     if (key.upArrow) {
       if (navigationMode === 'sections') {
         setSelectedSectionIndex(prev => Math.max(0, prev - 1));
@@ -446,7 +875,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         setSelectedFieldIndex(prev => Math.max(0, prev - 1));
       }
     }
-    
+
     if (key.downArrow) {
       if (navigationMode === 'sections') {
         setSelectedSectionIndex(prev => Math.min(sections.length - 1, prev + 1));
@@ -455,49 +884,80 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         setSelectedFieldIndex(prev => Math.min(fields.length - 1, prev + 1));
       }
     }
-    
+
     if (key.return) {
       if (navigationMode === 'sections') {
-        // Toggle section expansion
-        const newSections = [...sections];
-        newSections[selectedSectionIndex].expanded = !newSections[selectedSectionIndex].expanded;
-        setSections(newSections);
-        
+        // Toggle section expansion using proper immutable update
+        const currentSection = sections[selectedSectionIndex];
+        const willExpand = !currentSection.expanded;
+
+        setSections(prev => prev.map((section, idx) =>
+          idx === selectedSectionIndex
+            ? { ...section, expanded: willExpand }
+            : section
+        ));
+
         // If expanding, switch to field navigation
-        if (newSections[selectedSectionIndex].expanded) {
+        if (willExpand) {
           setNavigationMode('fields');
           setSelectedFieldIndex(0);
         }
       } else {
-        // Edit field
+        // Edit field (with MCP special actions)
         const fields = getCurrentSectionFields();
         const field = fields[selectedFieldIndex];
-        if (field) {
-          startEditing(field);
+        if (!field) return;
+        if (field.key === 'mcp.conn.test') {
+          testMcpConnection();
+          return;
         }
+        startEditing(field);
       }
     }
-    
+    // MCP quick controls when editing connections
+    const currentSection = sections[selectedSectionIndex];
+    if (navigationMode === 'fields' && currentSection?.name === 'MCP') {
+      if (input?.toLowerCase?.() === 'a') {
+        addMcpConnection();
+        return;
+      }
+      if (input?.toLowerCase?.() === 'd') {
+        removeMcpConnection();
+        return;
+      }
+      if (key.leftArrow) {
+        const conns = getMcpConnections();
+        if (conns.length > 0) setSelectedMcpIndex(i => Math.max(0, i - 1));
+      }
+      if (key.rightArrow) {
+        const conns = getMcpConnections();
+        if (conns.length > 0) setSelectedMcpIndex(i => Math.min(conns.length - 1, i + 1));
+      }
+    }
     if ((key.ctrl || key.meta) && (input?.toLowerCase?.() === 's')) {
       showMessage('Saving configuration...', 'info', 0);
       handleSaveRef.current?.();
       return;
     }
-    
+
     // Expand/collapse with arrows in sections mode
     if (navigationMode === 'sections') {
       if (key.leftArrow) {
-        const newSections = [...sections];
-        if (newSections[selectedSectionIndex].expanded) {
-          newSections[selectedSectionIndex].expanded = false;
-          setSections(newSections);
+        if (sections[selectedSectionIndex].expanded) {
+          setSections(prev => prev.map((section, idx) =>
+            idx === selectedSectionIndex
+              ? { ...section, expanded: false }
+              : section
+          ));
         }
       }
       if (key.rightArrow) {
-        const newSections = [...sections];
-        if (!newSections[selectedSectionIndex].expanded) {
-          newSections[selectedSectionIndex].expanded = true;
-          setSections(newSections);
+        if (!sections[selectedSectionIndex].expanded) {
+          setSections(prev => prev.map((section, idx) =>
+            idx === selectedSectionIndex
+              ? { ...section, expanded: true }
+              : section
+          ));
           setNavigationMode('fields');
           setSelectedFieldIndex(0);
         }
@@ -541,6 +1001,8 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
     }
 
     if (key.escape) {
+      // Set guard to prevent navigation handler from changing mode
+      justExitedViaEscRef.current = true;
       setEditingField(null);
       setTempValue('');
     }
@@ -615,12 +1077,12 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         // Clear temperature to null so backend uses model-specific defaults
         updates.temperature = null;
       } else if (value === 'bedrock') {
-        // Set AWS Bedrock defaults - Latest Sonnet 4.5 with 1M context + thinking
-        updates.modelId = 'us.anthropic.claude-sonnet-4-5-20250929-v1:0';
+        // Set AWS Bedrock defaults - Latest Opus 4.5 with effort parameter support
+        updates.modelId = 'global.anthropic.claude-opus-4-5-20251124-v1:0';
         updates.embeddingModel = 'amazon.titan-embed-text-v2:0';
         updates.evaluationModel = 'us.anthropic.claude-3-5-sonnet-20241022-v2:0';
         updates.swarmModel = 'us.anthropic.claude-3-5-sonnet-20241022-v2:0';
-        // Clear temperature to null so backend uses model-specific defaults (1.0 for Sonnet 4.5)
+        // Clear temperature to null so backend uses model-specific defaults
         updates.temperature = null;
       } else if (value === 'litellm') {
         // Set LiteLLM defaults
@@ -637,17 +1099,17 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       showMessage(`Switched to ${value} provider with default models`, 'info');
       return;
     }
-    
+
     // Special handling for currentModel pricing - update the actual model's pricing
     if (key.startsWith('currentModel.')) {
       const pricingKey = key.replace('currentModel.', '');
       const currentModelId = config.modelId;
-      
+
       if (!currentModelId) {
         showMessage('No model selected to configure pricing', 'error');
         return;
       }
-      
+
       // Update pricing for the current model
       const newConfig = { ...config };
       if (!newConfig.modelPricing) {
@@ -659,21 +1121,21 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           outputCostPer1k: 0
         };
       }
-      
+
       // Update the specific pricing field
       (newConfig.modelPricing[currentModelId] as any)[pricingKey] = value;
-      
+
       updateConfig(newConfig);
       setUnsavedChanges(true);
       return;
     }
-    
+
     // Handle nested keys
     if (key.includes('.')) {
       const parts = key.split('.');
       const newConfig = { ...config };
       let current: any = newConfig;
-      
+
       // Navigate to the parent object
       for (let i = 0; i < parts.length - 1; i++) {
         if (!current[parts[i]]) {
@@ -681,10 +1143,10 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         }
         current = current[parts[i]];
       }
-      
+
       // Set the final value
       current[parts[parts.length - 1]] = value;
-      
+
       // Update the entire config
       updateConfig(newConfig);
     } else {
@@ -693,12 +1155,23 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
     setUnsavedChanges(true);
   }, [config, updateConfig]);
 
-  
+
   const startEditing = useCallback((field: ConfigField) => {
     // Prevent editing of read-only fields
     if (field.key === 'modelPricingInfo') {
       showMessage('Model pricing is configured in ~/.cyber-autoagent/config.json under "modelPricing"', 'info');
       return;
+    }
+    // MCP section custom handlers
+    if (field.section === 'MCP') {
+      if (field.key === 'mcp.enabled') {
+        setMcpEnabled(!((config as any).mcp?.enabled ?? false));
+        return;
+      }
+      if (field.key === 'mcp.connectionIndex') {
+        showMessage('Use ←/→ to switch connections', 'info', 2000);
+        return;
+      }
     }
 
     const currentValue = config[field.key as keyof typeof config];
@@ -731,9 +1204,31 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
     } else {
       setTempValue(String(currentValue || ''));
     }
-  }, [config, updateConfigValue]);
-  
+  }, [config, updateConfigValue, showMessage]);
+
   const getValue = (key: string): string => {
+    // MCP pseudo values
+    if (key.startsWith('mcp.')) {
+      const mcp = (config as any).mcp ?? { enabled: false, connections: [] };
+      if (key === 'mcp.enabled') return mcp.enabled ? 'Enabled' : 'Disabled';
+      if (key === 'mcp.connectionIndex') return String(selectedMcpIndex + 1);
+      const conn = getSelectedMcp();
+      if (!conn) return 'No connections';
+      if (key === 'mcp.conn.id') return String(conn.id ?? '');
+      if (key === 'mcp.conn.transport') return String(conn.transport ?? 'stdio');
+      if (key === 'mcp.conn.server_url') return String(conn.server_url ?? '');
+      if (key === 'mcp.conn.command') return Array.isArray(conn.command) ? JSON.stringify(conn.command) : '';
+      if (key === 'mcp.conn.headers') return conn.headers ? JSON.stringify(conn.headers) : '';
+      if (key === 'mcp.conn.plugins') return Array.isArray(conn.plugins) ? conn.plugins.join(', ') : '';
+      if (key === 'mcp.conn.allowedTools')
+        return Array.isArray(conn.allowedTools) ? conn.allowedTools.join(', ') : '';
+      if (key === 'mcp.conn.timeoutSeconds') return String(conn.timeoutSeconds ?? '');
+      if (key === 'mcp.conn.test') {
+        const status = mcpTestStatus[selectedMcpIndex];
+        return status ? `Press Enter to test — ${status}` : 'Press Enter to test';
+      }
+    }
+
     // Special handling for model pricing info
     if (key === 'modelPricingInfo') {
       if (config.modelPricing && Object.keys(config.modelPricing).length > 0) {
@@ -742,23 +1237,23 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       }
       return 'Using default AWS Bedrock pricing';
     }
-    
+
     // Special handling for currentModel pricing - use actual modelId from config
     if (key.startsWith('currentModel.')) {
       const pricingKey = key.replace('currentModel.', '');
       const currentModelId = config.modelId;
-      
+
       if (!currentModelId) {
         return 'No model selected';
       }
-      
+
       // Check if pricing exists for current model
       const modelPricing = config.modelPricing?.[currentModelId];
       if (modelPricing && pricingKey in modelPricing) {
         const value = modelPricing[pricingKey as keyof typeof modelPricing];
         return String(value || 0);
       }
-      
+
       // Provider-specific defaults
       if (config.modelProvider === 'ollama') {
         return '0.000'; // Ollama is free
@@ -768,7 +1263,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         return pricingKey === 'inputCostPer1k' ? '0.003' : '0.015'; // Bedrock defaults
       }
     }
-    
+
     // Handle nested keys (e.g., modelPricing.model.inputCostPer1k)
     let value: any = config;
     const parts = key.split('.');
@@ -780,7 +1275,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         break;
       }
     }
-    
+
     const field = CONFIG_FIELDS.find(f => f.key === key);
 
     if (value === undefined || value === null || value === '') {
@@ -847,15 +1342,15 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
 
   const renderNotification = () => {
     if (!message) return null;
-    
+
     // Create a prominent notification box that stands out
     return (
       <Box
         borderStyle="double"
         borderColor={
           message.type === 'success' ? theme.success :
-          message.type === 'error' ? theme.danger :
-          theme.primary
+            message.type === 'error' ? theme.danger :
+              theme.primary
         }
         paddingX={1}
         marginBottom={1}
@@ -864,8 +1359,8 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           bold
           color={
             message.type === 'success' ? theme.success :
-            message.type === 'error' ? theme.danger :
-            theme.primary
+              message.type === 'error' ? theme.danger :
+                theme.primary
           }
         >
           {message.type === 'success' && '━━━ '}
@@ -902,7 +1397,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
             const value = config[f.key as keyof typeof config];
             return value !== undefined && value !== null && value !== '';
           }).length;
-          
+
           return (
             <Box key={section.name} flexDirection="column" marginBottom={1}>
               {/* Section Header */}
@@ -924,52 +1419,72 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
               {/* Section Description */}
               <Box paddingLeft={4}>
                 <Text color={theme.muted} wrap="wrap">{section.description}</Text>
+                {section.name === 'MCP' && (
+                  <Text color={theme.muted} wrap="wrap"> — Keys: A = add, D = delete, ←/→ switch connection, Enter = edit field, Enter on "Test Connection" to run check</Text>
+                )}
               </Box>
-              
+
               {/* Fields (if expanded) */}
               {section.expanded && navigationMode === 'fields' && sectionIndex === selectedSectionIndex && (
-                <Box flexDirection="column" paddingLeft={2} marginTop={1}>
-                  {getCurrentSectionFields().map((field, fieldIndex) => {
-                    const isFieldSelected = fieldIndex === selectedFieldIndex;
-                    const isEditing = editingField?.field === field.key;
-                    
+                <>
+                  {section.name === 'MCP' && (() => {
+                    const conns = getMcpConnections();
+                    const hasAny = conns.length > 0;
                     return (
-                      <Box key={field.key} marginY={0.25}>
-                        {(() => {
-                          const cols = (() => { try { return Math.max(40, Math.min(Number((process as any)?.stdout?.columns || 80), 200)); } catch { return 80; } })();
-                          const labelWidth = Math.max(20, Math.min(48, Math.floor(cols * 0.38)));
-                          return (
-                            <>
-                              <Box width={labelWidth}>
-                                <Text 
-                                  bold={isFieldSelected}
-                                  color={isFieldSelected ? theme.accent : theme.muted}
-                                >
-                                  {isFieldSelected ? '▸ ' : '  '}{field.label}:
-                                  {field.required && <Text color={theme.danger}> *</Text>}
-                                </Text>
-                              </Box>
-                              <Box flexGrow={1}>
-                                {isEditing ? renderEditingField(field) : (
-                                  <Text 
-                                    bold={isFieldSelected}
-                                    color={
-                                      getValue(field.key) === 'Not set' ? theme.muted : 
-                                      field.type === 'boolean' && getValue(field.key) === 'Enabled' ? theme.success :
-                                      isFieldSelected ? theme.foreground : theme.primary
-                                    }
-                                  >
-                                    {getValue(field.key)}
-                                  </Text>
-                                )}
-                              </Box>
-                            </>
-                          );
-                        })()}
+                      <Box paddingLeft={4} marginTop={1}>
+                        <Text color={theme.muted}>
+                          {hasAny ? (
+                            <>Manage connections (A=add, D=delete, ←/→ switch). Selected: {selectedMcpIndex + 1}/{conns.length}{getSelectedMcp()?.id ? ` — ${getSelectedMcp()?.id}` : ''}</>
+                          ) : (
+                            <>No connections yet — press A to add your first MCP server</>
+                          )}
+                        </Text>
                       </Box>
                     );
-                  })}
-                </Box>
+                  })()}
+                  <Box flexDirection="column" paddingLeft={2} marginTop={1}>
+                    {getCurrentSectionFields().map((field, fieldIndex) => {
+                      const isFieldSelected = fieldIndex === selectedFieldIndex;
+                      const isEditing = editingField?.field === field.key;
+
+                      return (
+                        <Box key={field.key} marginY={0.25}>
+                          {(() => {
+                            const cols = (() => { try { return Math.max(40, Math.min(Number((process as any)?.stdout?.columns || 80), 200)); } catch { return 80; } })();
+                            const labelWidth = Math.max(20, Math.min(48, Math.floor(cols * 0.38)));
+                            return (
+                              <>
+                                <Box width={labelWidth}>
+                                  <Text
+                                    bold={isFieldSelected}
+                                    color={isFieldSelected ? theme.accent : theme.muted}
+                                  >
+                                    {isFieldSelected ? '▸ ' : '  '}{field.label}:
+                                    {field.required && <Text color={theme.danger}> *</Text>}
+                                  </Text>
+                                </Box>
+                                <Box flexGrow={1}>
+                                  {isEditing ? renderEditingField(field) : (
+                                    <Text
+                                      bold={isFieldSelected}
+                                      color={
+                                        getValue(field.key) === 'Not set' ? theme.muted :
+                                          field.type === 'boolean' && getValue(field.key) === 'Enabled' ? theme.success :
+                                            isFieldSelected ? theme.foreground : theme.primary
+                                      }
+                                    >
+                                      {getValue(field.key)}
+                                    </Text>
+                                  )}
+                                </Box>
+                              </>
+                            );
+                          })()}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                </>
               )}
             </Box>
           );
@@ -981,6 +1496,273 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
   const renderEditingField = (field: ConfigField) => {
     if (!editingField) return null;
 
+    // MCP transport (single select with custom updater)
+    if (field.key === 'mcp.conn.transport') {
+      return (
+        <SelectInput
+          items={(MCP_TRANSPORT_OPTIONS as any)}
+          onSelect={(item) => {
+            updateMcpConnection('transport', item.value);
+            setEditingField(null);
+            setTempValue('');
+            setNavigationMode('fields');
+          }}
+          indicatorComponent={({ isSelected }) => (
+            <Text color={isSelected ? theme.primary : 'transparent'}>❯ </Text>
+          )}
+          itemComponent={({ isSelected, label }) => (
+            <Text color={isSelected ? theme.primary : theme.foreground}>{label}</Text>
+          )}
+        />
+      );
+    }
+
+    // MCP plugins: custom free-form list editor (mirrors "Allowed Tools Section" UI)
+    if (field.key === 'mcp.conn.plugins') {
+      const conn = getSelectedMcp();
+      const plugins: string[] = Array.isArray(conn?.plugins) ? conn.plugins : [];
+      const cleanPlugins = plugins.includes('*')
+        ? ['*']
+        : Array.from(new Set(plugins.filter(p => p && p !== '*')));
+
+      const handleAddPlugin = (raw: string) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return;
+
+        let next: string[] = [];
+        if (trimmed === '*') {
+          next = ['*'];
+        } else {
+          next = cleanPlugins.filter(p => p !== '*');
+          if (!next.includes(trimmed)) next.push(trimmed);
+        }
+
+        updateMcpConnection('plugins', next);
+        setTempValue('');
+
+        // Remain in editing mode, keep MCP expanded, stay in fields navigation mode
+        setNavigationMode('fields');
+        setSections(prev => prev.map((s, i) =>
+          i === selectedSectionIndex ? { ...s, expanded: true } : s
+        ));
+      };
+
+      const handleRemovePlugin = (item: { label: string; value: string }) => {
+        const toRemove = item.value;
+        const next = cleanPlugins.filter(p => p !== toRemove);
+        updateMcpConnection('plugins', next);
+
+        // Remain in editing mode, keep MCP expanded, stay in fields navigation mode
+        setNavigationMode('fields');
+        setSections(prev => prev.map((s, i) =>
+          i === selectedSectionIndex ? { ...s, expanded: true } : s
+        ));
+      };
+
+      return (
+        <Box flexDirection="column">
+          <Box>
+            <Text color={theme.primary} bold>
+              Plugins:{' '}
+            </Text>
+            {cleanPlugins.length === 0 && <Text color={theme.muted}>[none]</Text>}
+            {cleanPlugins.map((p, idx) => (
+              <Text key={p} color={p === '*' ? theme.accent : theme.success}>
+                {' '}
+                ✓ {p}
+                {idx < cleanPlugins.length - 1 ? <Text color={theme.muted}>,</Text> : null}
+              </Text>
+            ))}
+          </Box>
+          <Box marginTop={1}>
+            <Text color={theme.muted}>
+              Type plugin name (or <Text color={theme.accent} bold>*</Text> for all), press Enter to add:
+            </Text>
+          </Box>
+          <Box>
+            <TextInput
+              value={tempValue}
+              onChange={v => setTempValue(v)}
+              onSubmit={v => handleAddPlugin(v)}
+              placeholder="plugin name or *"
+            />
+          </Box>
+          {cleanPlugins.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.muted}>Select a plugin to remove:</Text>
+              <SelectInput
+                items={cleanPlugins.map(p => ({ label: p, value: p }))}
+                onSelect={handleRemovePlugin}
+                indicatorComponent={({ isSelected }) => (
+                  <Text color={isSelected ? theme.primary : 'transparent'}>❯ </Text>
+                )}
+                itemComponent={({ isSelected, label }) => (
+                  <Text color={isSelected ? theme.primary : theme.foreground}>{label}</Text>
+                )}
+              />
+            </Box>
+          )}
+          <Box marginTop={1}>
+            <Text color={theme.muted}>Enter = add • Select = remove • * = all plugins • Esc = done</Text>
+          </Box>
+        </Box>
+      );
+    }
+
+    // MCP allowed tools: free-form list editor (similar to plugins)
+    if (field.key === 'mcp.conn.allowedTools') {
+      const conn = getSelectedMcp();
+      const allowed: string[] = Array.isArray(conn?.allowedTools) ? conn.allowedTools : ['*'];
+      const cleanAllowed = allowed.includes('*')
+        ? ['*']
+        : Array.from(new Set(allowed.filter(t => t && t !== '*')));
+
+      const handleAddTool = (raw: string) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return;
+
+        let next: string[] = [];
+        if (trimmed === '*') {
+          next = ['*'];
+        } else {
+          next = cleanAllowed.filter(t => t !== '*');
+          if (!next.includes(trimmed)) next.push(trimmed);
+        }
+
+        updateMcpConnection('allowedTools', next);
+        setTempValue('');
+
+        // Remain in editing mode, keep MCP expanded, stay in fields navigation mode
+        setNavigationMode('fields');
+        setSections(prev => prev.map((s, i) =>
+          i === selectedSectionIndex ? { ...s, expanded: true } : s
+        ));
+      };
+
+      const handleRemoveTool = (item: { label: string; value: string }) => {
+        const remaining = cleanAllowed.filter(t => t !== item.value);
+        const next = remaining.length ? remaining : ['*'];
+        updateMcpConnection('allowedTools', next);
+
+        // Remain in editing mode, keep MCP expanded, stay in fields navigation mode
+        setNavigationMode('fields');
+        setSections(prev => prev.map((s, i) =>
+          i === selectedSectionIndex ? { ...s, expanded: true } : s
+        ));
+      };
+
+      return (
+        <Box flexDirection="column">
+          <Box>
+            <Text color={theme.primary} bold>
+              Allowed Tools:{' '}
+            </Text>
+            {cleanAllowed.length === 0 && <Text color={theme.muted}>[none]</Text>}
+            {cleanAllowed.map((t, i) => (
+              <Text key={t} color={t === '*' ? theme.accent : theme.success}>
+                {' '}
+                ✓ {t}
+                {i < cleanAllowed.length - 1 ? <Text color={theme.muted}>,</Text> : null}
+              </Text>
+            ))}
+          </Box>
+          <Box marginTop={1}>
+            <Text color={theme.muted}>
+              Type tool name (or <Text color={theme.accent} bold>*</Text> for all), press Enter to add:
+            </Text>
+          </Box>
+          <Box>
+            <TextInput
+              value={tempValue}
+              onChange={v => setTempValue(v)}
+              onSubmit={v => handleAddTool(v)}
+              placeholder="tool name or *"
+            />
+          </Box>
+          {cleanAllowed.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={theme.muted}>Select a tool to remove:</Text>
+              <SelectInput
+                items={cleanAllowed.map(t => ({ label: t, value: t }))}
+                onSelect={handleRemoveTool}
+                indicatorComponent={({ isSelected }) => (
+                  <Text color={isSelected ? theme.primary : 'transparent'}>❯ </Text>
+                )}
+                itemComponent={({ isSelected, label }) => (
+                  <Text color={isSelected ? theme.primary : theme.foreground}>{label}</Text>
+                )}
+              />
+            </Box>
+          )}
+          <Box marginTop={1}>
+            <Text color={theme.muted}>Enter = add • Select = remove • * = all tools • Esc = done</Text>
+          </Box>
+        </Box>
+      );
+    }
+
+    // MCP JSON fields
+    if (field.key === 'mcp.conn.headers' || field.key === 'mcp.conn.command') {
+      return (
+        <TextInput
+          value={tempValue}
+          onChange={(v) => setTempValue(v)}
+          onSubmit={(value) => {
+            try {
+              const parsed = JSON.parse(value || (field.key === 'mcp.conn.headers' ? '{}' : '[]'));
+              if (field.key === 'mcp.conn.headers' && (parsed && typeof parsed === 'object' && !Array.isArray(parsed))) {
+                updateMcpConnection('headers', parsed);
+              } else if (field.key === 'mcp.conn.command' && Array.isArray(parsed)) {
+                updateMcpConnection('command', parsed);
+              } else {
+                throw new Error('Invalid JSON shape');
+              }
+              setEditingField(null);
+              setTempValue('');
+              setNavigationMode('fields');
+            } catch (e: any) {
+              showMessage(`Invalid JSON: ${e?.message || String(e)}`, 'error', 5000);
+            }
+          }}
+        />
+      );
+    }
+
+    // MCP scalar fields & index setter
+    if (field.key.startsWith('mcp.conn.') || field.key === 'mcp.connectionIndex') {
+      return (
+        <TextInput
+          value={tempValue}
+          onChange={(v) => setTempValue(v)}
+          onSubmit={(value) => {
+            if (field.key === 'mcp.connectionIndex') {
+              const conns = getMcpConnections();
+              const idx = Math.max(0, Math.min(conns.length - 1, Math.max(0, (parseInt(value, 10) || 1) - 1)));
+              setSelectedMcpIndex(idx);
+              setEditingField(null);
+              setTempValue('');
+              setNavigationMode('fields'); return;
+            }
+            if (field.key === 'mcp.conn.timeoutSeconds') {
+              const num = parseInt(value, 10);
+              if (!Number.isFinite(num)) {
+                showMessage('Enter a valid number', 'error', 3000);
+                return;
+              }
+              updateMcpConnection(field.key.split('.').pop() as string, num);
+            } else if (field.key === 'mcp.conn.id' || field.key === 'mcp.conn.server_url') {
+              updateMcpConnection(field.key.split('.').pop() as string, value);
+            } else {
+              // Fallback: no-op
+            }
+            setEditingField(null);
+            setTempValue('');
+            setNavigationMode('fields');
+          }}
+        />
+      );
+    }
+
     if (field.type === 'select' && editingField.options) {
       return (
         <SelectInput
@@ -991,11 +1773,6 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           onSelect={(item) => {
             updateConfigValue(field.key, item.value);
             setEditingField(null);
-
-            // Ensure section stays expanded and move to next field
-            const newSections = [...sections];
-            newSections[selectedSectionIndex].expanded = true;
-            setSections(newSections);
 
             // Move to next field after selection
             const fields = getCurrentSectionFields();
@@ -1021,20 +1798,12 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         <TokenInput
           fieldKey={field.key}
           onSubmit={(value) => {
-            // Clean and sanitize the value
             const cleanedValue = cleanInputForKey(field.key, value);
             updateConfigValue(field.key, cleanedValue);
             setEditingField(null);
             setTempValue('');
-
-            // Brief success message
             showMessage(`Token saved (${cleanedValue.length} chars)`, 'success', 2000);
-
-            // Ensure we stay in fields navigation mode and section stays expanded
             setNavigationMode('fields');
-            const newSections = [...sections];
-            newSections[selectedSectionIndex].expanded = true;
-            setSections(newSections);
 
             // Move to next field after saving
             const fields = getCurrentSectionFields();
@@ -1052,17 +1821,11 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
         <PasswordInput
           fieldKey={field.key}
           onSubmit={(value) => {
-            // Clean and sanitize the value
             const cleanedValue = cleanInputForKey(field.key, value);
             updateConfigValue(field.key, cleanedValue);
             setEditingField(null);
             setTempValue('');
-
-            // Ensure we stay in fields navigation mode and section stays expanded
             setNavigationMode('fields');
-            const newSections = [...sections];
-            newSections[selectedSectionIndex].expanded = true;
-            setSections(newSections);
 
             // Move to next field after saving
             const fields = getCurrentSectionFields();
@@ -1094,19 +1857,12 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           } else {
             // Clean and sanitize the value, especially for tokens/keys
             const cleanedValue = cleanInputForKey(field.key, value);
-
-            // More debug logging
-            // No debug logging of cleaned token values
             updateConfigValue(field.key, cleanedValue);
           }
+
           setEditingField(null);
           setTempValue('');
-
-          // Ensure we stay in fields navigation mode and section stays expanded
           setNavigationMode('fields');
-          const newSections = [...sections];
-          newSections[selectedSectionIndex].expanded = true;
-          setSections(newSections);
 
           // Move to next field after saving
           const fields = getCurrentSectionFields();
@@ -1122,25 +1878,25 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
   // Quick status summary
   const getConfigStatus = () => {
     const hasProvider = config.modelProvider;
-    const hasCredentials = 
+    const hasCredentials =
       (config.modelProvider === 'bedrock' && (config.awsAccessKeyId || config.awsBearerToken)) ||
       (config.modelProvider === 'ollama' && config.ollamaHost) ||
       (config.modelProvider === 'litellm');
     const hasModel = config.modelId;
-    
+
     if (!hasProvider) return { status: 'error', message: 'No provider selected' };
     if (!hasCredentials) return { status: 'warning', message: 'Missing credentials' };
     if (!hasModel) return { status: 'warning', message: 'No model selected' };
-    
+
     return { status: 'success', message: 'Ready' };
   };
-  
+
   // Deployment mode status
   const getDeploymentModeDisplay = () => {
     const mode = config.deploymentMode || 'unknown';
     const observabilityStatus = config.observability ? 'enabled' : 'disabled';
     const evaluationStatus = config.autoEvaluation ? 'enabled' : 'disabled';
-    
+
     return {
       mode: mode.replace('-', ' ').toUpperCase(),
       observability: observabilityStatus,
@@ -1148,7 +1904,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       description: getDeploymentDescription(mode)
     };
   };
-  
+
   const getDeploymentDescription = (mode: string) => {
     switch (mode) {
       case 'cli': return 'Python CLI mode (token counting enabled, remote traces disabled)';
@@ -1157,7 +1913,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
       default: return 'Deployment mode detection in progress';
     }
   };
-  
+
   const status = getConfigStatus();
   const deploymentStatus = getDeploymentModeDisplay();
 
@@ -1184,8 +1940,8 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
             borderStyle="double"
             borderColor={
               message.type === 'success' ? theme.success :
-              message.type === 'error' ? theme.danger :
-              theme.primary
+                message.type === 'error' ? theme.danger :
+                  theme.primary
             }
             paddingX={1}
             marginBottom={1}
@@ -1195,8 +1951,8 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
               wrap="wrap"
               color={
                 message.type === 'success' ? theme.success :
-                message.type === 'error' ? theme.danger :
-                theme.primary
+                  message.type === 'error' ? theme.danger :
+                    theme.primary
               }
             >
               {message.type === 'success' && '✓ '}
@@ -1206,36 +1962,36 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
             </Text>
           </Box>
         )}
-        
+
         {renderHeader()}
-      
-      {/* Status bar */}
-      <Box marginBottom={1} flexDirection="column">
-        <Text
-          wrap="wrap"
-          color={
-            status.status === 'success' ? theme.success :
-            status.status === 'warning' ? theme.warning :
-            theme.danger
-          }
-        >
-          Status: {status.message}
-        </Text>
-        <Text color={theme.muted} wrap="wrap">
-          Deployment: {deploymentStatus.mode} |
-          Observability: {deploymentStatus.observability} |
-          Evaluation: {deploymentStatus.evaluation}
-        </Text>
-        <Text color={theme.muted} wrap="wrap">
-          {deploymentStatus.description}
-        </Text>
-      </Box>
-      
-      {/* Main configuration sections */}
-      <Box flexDirection="column" flexGrow={1}>
-        {renderSections()}
-      </Box>
-      
+
+        {/* Status bar */}
+        <Box marginBottom={1} flexDirection="column">
+          <Text
+            wrap="wrap"
+            color={
+              status.status === 'success' ? theme.success :
+                status.status === 'warning' ? theme.warning :
+                  theme.danger
+            }
+          >
+            Status: {status.message}
+          </Text>
+          <Text color={theme.muted} wrap="wrap">
+            Deployment: {deploymentStatus.mode} |
+            Observability: {deploymentStatus.observability} |
+            Evaluation: {deploymentStatus.evaluation}
+          </Text>
+          <Text color={theme.muted} wrap="wrap">
+            {deploymentStatus.description}
+          </Text>
+        </Box>
+
+        {/* Main configuration sections */}
+        <Box flexDirection="column" flexGrow={1}>
+          {renderSections()}
+        </Box>
+
         {/* Footer with shortcuts */}
         <Box marginTop={1} borderTop borderColor={unsavedChanges ? theme.warning : theme.muted} paddingTop={1}>
           <Text color={theme.muted} wrap="wrap">

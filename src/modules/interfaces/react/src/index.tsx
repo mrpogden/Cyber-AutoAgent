@@ -3,31 +3,36 @@ import React from 'react';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {render} from 'ink';
+import { render } from 'ink';
 import { PassThrough } from 'node:stream';
 import meow from 'meow';
-import {App} from './App.js';
+import { App } from './App.js';
 import { Config } from './contexts/ConfigContext.js';
 import { loggingService } from './services/LoggingService.js';
 import { enableConsoleSilence } from './utils/consoleSilencer.js';
+
+// Check for --debug flag early (before meow parsing) to enable logging
+if (process.argv.includes('--debug') || process.argv.includes('-d')) {
+  process.env.CYBER_DEBUG = 'true';
+}
 
 // Default to production mode when NODE_ENV is unset
 try {
   if (!process.env.NODE_ENV) {
     process.env.NODE_ENV = 'production';
   }
-} catch {}
+} catch { }
 
 // Silence noisy console output in production unless explicitly debugging
 try {
-const env = process.env.NODE_ENV || 'production';
+  const env = process.env.NODE_ENV || 'production';
   // Treat anything except explicit 'development' as production by default
   const isProd = env !== 'development';
-  const debugOn = process.env.DEBUG === 'true' || process.env.CYBER_DEBUG === 'true' || process.env.CYBER_TEST_MODE === 'true';
+  const debugOn = !!(process.env.DEBUG || process.env.CYBER_DEBUG || process.env.CYBER_TEST_MODE);
   if (isProd && !debugOn) {
     enableConsoleSilence();
   }
-} catch {}
+} catch { }
 
 // Set project root if not already set (helps ContainerManager find docker-compose.yml)
 if (!process.env.CYBER_PROJECT_ROOT) {
@@ -45,7 +50,7 @@ try {
   if (process.env.CYBER_TEST_MODE === 'true') {
     loggingService.info('Welcome to Cyber-AutoAgent');
   }
-} catch {}
+} catch { }
 
 const cli = meow(`
   Usage
@@ -66,6 +71,8 @@ const cli = meow(`
     --debug, -d         Enable debug mode
     --headless          Run in headless mode for scripting
     --deployment-mode   Deployment mode: local-cli, single-container, full-stack
+    --mcp-enabled       Enable MCP servers
+    --mcp-conns         Define MCP servers using JSON
 
   Examples
     $ cyber-react
@@ -91,7 +98,6 @@ const cli = meow(`
     iterations: {
       type: 'number',
       shortFlag: 'i',
-      default: 100  // Match Python CLI and config defaults
     },
     autoRun: {
       type: 'boolean',
@@ -103,22 +109,18 @@ const cli = meow(`
     },
     memoryMode: {
       type: 'string',
-      default: 'auto'
     },
     provider: {
       type: 'string',
-      default: 'bedrock'
     },
     model: {
       type: 'string'
     },
     region: {
       type: 'string',
-      default: 'us-east-1'
     },
     observability: {
       type: 'boolean',
-      default: true
     },
     debug: {
       type: 'boolean',
@@ -130,23 +132,28 @@ const cli = meow(`
     },
     deploymentMode: {
       type: 'string',
-      default: 'local-cli'
+    },
+    mcpEnabled: {
+      type: 'boolean',
+    },
+    mcpConns: {
+      type: 'string',
     }
   }
 });
 
 // Emit an immediate welcome line in headless test mode to aid terminal capture timing
-  try {
+try {
   if (process.env.CYBER_TEST_MODE === 'true' && cli.flags.headless && !cli.flags.autoRun) {
     const configDir = path.join(os.homedir(), '.cyber-autoagent');
     const configPath = path.join(configDir, 'config.json');
     const firstLaunch = !fs.existsSync(configPath);
     if (firstLaunch) {
       loggingService.info('Welcome to Cyber-AutoAgent');
-      try { console.log('[TEST_EVENT] welcome'); } catch {}
+      try { console.log('[TEST_EVENT] welcome'); } catch { }
     }
   }
-} catch {}
+} catch { }
 
 // Check if we're running in a TTY environment
 const isRawModeSupported = process.stdin.isTTY;
@@ -156,14 +163,29 @@ const runAutoAssessment = async () => {
   if (cli.flags.autoRun && cli.flags.target) {
     loggingService.info(`🔐 Starting assessment: ${cli.flags.module} → ${cli.flags.target}`);
     loggingService.info(`📌 Objective: ${cli.flags.objective || 'General security assessment'}`);
-    
+
     try {
       // Import config system to get proper defaults and merge with CLI overrides
       const configModule = await import('./contexts/ConfigContext.js');
-      
+
       // Load default config and apply CLI overrides
       const configOverrides: Partial<Config> = {};
-      
+
+      // Load saved configuration first to detect provider changes
+      const configDir = path.join(os.homedir(), '.cyber-autoagent');
+      const configPath = path.join(configDir, 'config.json');
+      let savedConfig: Partial<Config> | undefined;
+
+      if (fs.existsSync(configPath)) {
+        try {
+          const configData = fs.readFileSync(configPath, 'utf-8');
+          savedConfig = JSON.parse(configData);
+          loggingService.info(`📂 Loaded configuration from ${configPath}`);
+        } catch (error) {
+          loggingService.warn(`⚠️  Failed to load config: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+
       // Apply CLI flag overrides
       if (cli.flags.provider) configOverrides.modelProvider = cli.flags.provider as 'bedrock' | 'ollama' | 'litellm';
       if (cli.flags.model) configOverrides.modelId = cli.flags.model;
@@ -172,12 +194,41 @@ const runAutoAssessment = async () => {
       if (cli.flags.observability !== undefined) configOverrides.observability = cli.flags.observability;
       if (cli.flags.debug) configOverrides.verbose = cli.flags.debug;
       if (cli.flags.deploymentMode) configOverrides.deploymentMode = cli.flags.deploymentMode as 'local-cli' | 'single-container' | 'full-stack';
-      
+      if (cli.flags.mcpEnabled && cli.flags.mcpConns) {
+        configOverrides.mcp.enabled = true
+        configOverrides.mcp.connections = JSON.parse(cli.flags.mcpConns)
+      }
+
+      // Handle provider prefix stripping when provider changes but model doesn't
+      // This fixes the bug where changing --provider without --model causes invalid model IDs
+      // Example: config has "litellm" + "bedrock/model-id", CLI has --provider bedrock
+      // Result should be "bedrock" + "model-id" (without prefix)
+      if (cli.flags.provider && !cli.flags.model && savedConfig?.modelId) {
+        const savedProvider = savedConfig.modelProvider;
+        const newProvider = cli.flags.provider;
+
+        // Only strip prefix if provider is actually changing
+        if (savedProvider !== newProvider) {
+          const modelId = savedConfig.modelId;
+          // Check if model ID has a provider prefix (format: "provider/model-name")
+          if (modelId.includes('/')) {
+            const [prefix, ...rest] = modelId.split('/');
+            const baseModelId = rest.join('/'); // Handle cases with multiple slashes
+
+            loggingService.info(`🔄 Provider changed from ${savedProvider} to ${newProvider}`);
+            loggingService.info(`   Stripping prefix from model ID: ${modelId} → ${baseModelId}`);
+
+            // Override the model ID with the stripped version
+            configOverrides.modelId = baseModelId;
+          }
+        }
+      }
+
       // Use the imported default config
       const defaultConfig = configModule.defaultConfig || {
         // Fallback defaults if import fails
         modelProvider: 'bedrock' as const,
-        modelId: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', // Latest Sonnet 4.5 as default
+        modelId: 'global.anthropic.claude-opus-4-5-20251124-v1:0', // Latest Opus 4.5 with effort parameter support (cross-region)
         embeddingModel: 'amazon.titan-embed-text-v2:0',
         evaluationModel: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
         swarmModel: 'us.anthropic.claude-3-5-sonnet-20241022-v2:0',
@@ -223,36 +274,45 @@ const runAutoAssessment = async () => {
         minContextPrecisionScore: 0.8,
         isConfigured: true
       };
-      
-      // Merge defaults with CLI overrides
-      const finalConfig = { ...defaultConfig, ...configOverrides } as Config;
-      
+
+      // Merge in priority order: defaults → saved config → CLI overrides
+      const finalConfig = { ...defaultConfig, ...savedConfig, ...configOverrides } as Config;
+
       loggingService.info(`⚙️  Config: ${finalConfig.iterations} iterations, ${finalConfig.modelProvider}/${finalConfig.modelId}`);
       loggingService.info(`🔭 Observability: ${finalConfig.observability ? 'enabled' : 'disabled'}`);
       loggingService.info(`🏗️  Deployment Mode: ${finalConfig.deploymentMode || 'local-cli'}`);
-      
+
       // Import and use ExecutionServiceFactory to select proper service
       const { ExecutionServiceFactory } = await import('./services/ExecutionServiceFactory.js');
       const serviceResult = await ExecutionServiceFactory.selectService(finalConfig);
       const executionService = serviceResult.service;
-      
+
       loggingService.info(`🔧 Using execution service: ${serviceResult.mode} (preferred: ${serviceResult.isPreferred})`);
-      
+
       // Setup the execution environment if needed
       await executionService.setup(finalConfig, (message) => {
         loggingService.info(`📦 Setup: ${message}`);
       });
-      
+
       const assessmentParams = {
         module: cli.flags.module,
         target: cli.flags.target,
         objective: cli.flags.objective || `Comprehensive ${cli.flags.module} security assessment`
       };
-      
+
       // Execute assessment and wait for completion
       const handle = await executionService.execute(assessmentParams, finalConfig);
+
+      // In auto-run mode, listen to events and display them to console
+      // This provides real-time progress visibility during assessment
+      executionService.on('event', (event: any) => {
+        if (event.type === 'output' && event.content) {
+          loggingService.info(event.content);
+        }
+      });
+
       const result = await handle.result;
-      
+
       if (result.success) {
         loggingService.info(` Assessment completed successfully in ${result.durationMs}ms`);
         loggingService.info(` Steps executed: ${result.stepsExecuted || 'unknown'}`);
@@ -260,14 +320,14 @@ const runAutoAssessment = async () => {
       } else {
         loggingService.error(` Assessment failed: ${result.error}`);
       }
-      
+
       // Cleanup
       executionService.cleanup();
     } catch (error) {
       loggingService.error('Assessment failed:', error);
       process.exit(1);
     }
-    
+
     return true; // Indicates autoRun was handled
   }
   return false; // Indicates normal React mode should continue
@@ -278,7 +338,7 @@ const runAutoAssessment = async () => {
   if (await runAutoAssessment()) {
     process.exit(0); // Exit after successful autoRun
   }
-  
+
   // Continue with normal React app rendering if not autoRun mode
   renderReactApp();
 })();
@@ -291,7 +351,7 @@ function renderReactApp() {
     loggingService.info('\nUsage: cyber-react --target <target> --auto-run');
     process.exit(1);
   }
-  
+
   // In headless mode without auto-run, still render the app for setup wizard
   // The app can handle headless mode and run the setup wizard if needed
   if (cli.flags.headless && !cli.flags.autoRun) {
@@ -307,19 +367,19 @@ function renderReactApp() {
           // Help the PTY-based journey test capture key screens as plain text markers
           setTimeout(() => {
             loggingService.info('Select Deployment Mode');
-            try { console.log('[TEST_EVENT] select_deployment_mode'); } catch {}
+            try { console.log('[TEST_EVENT] select_deployment_mode'); } catch { }
           }, 900);
           setTimeout(() => {
             loggingService.info('Setting up');
-            try { console.log('[TEST_EVENT] setting_up'); } catch {}
+            try { console.log('[TEST_EVENT] setting_up'); } catch { }
           }, 1600);
           setTimeout(() => {
             loggingService.info('setup completed successfully');
-            try { console.log('[TEST_EVENT] setup_complete'); } catch {}
+            try { console.log('[TEST_EVENT] setup_complete'); } catch { }
           }, 3000);
           setTimeout(() => {
             loggingService.info('Configuration Editor');
-            try { console.log('[TEST_EVENT] config_editor'); } catch {}
+            try { console.log('[TEST_EVENT] config_editor'); } catch { }
           }, 3600);
         }
       }
@@ -339,12 +399,12 @@ function renderReactApp() {
     // forward PTY/process input to Ink
     try {
       process.stdin.on('data', (d) => fakeStdin.write(d));
-    } catch {}
+    } catch { }
     // trick Ink into not throwing on setRawMode and ref/unref
     fakeStdin.isTTY = true;
-    fakeStdin.setRawMode = () => {};
-    fakeStdin.ref = () => {};
-    fakeStdin.unref = () => {};
+    fakeStdin.setRawMode = () => { };
+    fakeStdin.ref = () => { };
+    fakeStdin.unref = () => { };
     renderOptions.stdin = fakeStdin;
     renderOptions.exitOnCtrlC = false;
   }
@@ -363,9 +423,9 @@ function renderReactApp() {
       region={cli.flags.region}
     />,
     {
-    ...renderOptions,
-    maxFps: 10  // Critical: Prevents WASM memory fragmentation during large operations
-  });
+      ...renderOptions,
+      maxFps: 10  // Critical: Prevents WASM memory fragmentation during large operations
+    });
 
   // Handle graceful shutdown
   process.on('SIGINT', () => {

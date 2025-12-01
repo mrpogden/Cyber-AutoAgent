@@ -191,23 +191,23 @@ def print_banner():
     ]
 
     subtitle = "Full Spectrum Cyber Operations"
-    version = "v0.1.3"
+    version = "v0.1.4"
 
     # Terminal Pro gradient colors (24-bit RGB ANSI codes)
     # Matrix green → Cyan → Apple blue (Gemini-inspired multi-color gradient)
     gradient_colors = [
-        "\033[38;2;0;255;65m",     # Bright matrix green (#00FF41)
-        "\033[38;2;0;247;92m",     # Green-emerald blend
-        "\033[38;2;0;239;120m",    # Emerald blend
-        "\033[38;2;0;229;160m",    # Emerald green (#00E5A0)
-        "\033[38;2;0;223;192m",    # Emerald-cyan blend
-        "\033[38;2;0;217;224m",    # Cyan blend
-        "\033[38;2;0;217;255m",    # Bright cyan (#00D9FF)
-        "\033[38;2;25;205;255m",   # Cyan-blue blend
-        "\033[38;2;51;184;255m",   # Sky blue (#33B8FF)
-        "\033[38;2;40;164;255m",   # Sky-blue blend
-        "\033[38;2;28;148;255m",   # Blue blend
-        "\033[38;2;10;132;255m",   # Apple blue (#0A84FF)
+        "\033[38;2;0;255;65m",  # Bright matrix green (#00FF41)
+        "\033[38;2;0;247;92m",  # Green-emerald blend
+        "\033[38;2;0;239;120m",  # Emerald blend
+        "\033[38;2;0;229;160m",  # Emerald green (#00E5A0)
+        "\033[38;2;0;223;192m",  # Emerald-cyan blend
+        "\033[38;2;0;217;224m",  # Cyan blend
+        "\033[38;2;0;217;255m",  # Bright cyan (#00D9FF)
+        "\033[38;2;25;205;255m",  # Cyan-blue blend
+        "\033[38;2;51;184;255m",  # Sky blue (#33B8FF)
+        "\033[38;2;40;164;255m",  # Sky-blue blend
+        "\033[38;2;28;148;255m",  # Blue blend
+        "\033[38;2;10;132;255m",  # Apple blue (#0A84FF)
     ]
 
     banner_art_width = 0
@@ -223,8 +223,17 @@ def print_banner():
             print(f"{gradient_colors[-1]}{line}{Colors.RESET}")
 
     # Print subtitle with Apple blue and version with bright matrix green
-    padding_length = (banner_art_width - len(subtitle) - len(version) - 3) // 2  # 3 for spacing
-    centered_line = (" " * max(0, padding_length)) + subtitle + " " + "\033[38;2;0;255;65m" + version + Colors.RESET
+    padding_length = (
+        banner_art_width - len(subtitle) - len(version) - 3
+    ) // 2  # 3 for spacing
+    centered_line = (
+        (" " * max(0, padding_length))
+        + subtitle
+        + " "
+        + "\033[38;2;0;255;65m"
+        + version
+        + Colors.RESET
+    )
     print(f"\033[38;2;10;132;255m{centered_line}{Colors.RESET}")
     print()  # Empty line after banner
 
@@ -250,15 +259,15 @@ def print_status(message, status="INFO"):
     if os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes"):
         return
 
-    # Print status for CLI mode
+    # Print status for CLI mode - professional symbols only
     status_config = {
-        "INFO": (Colors.BLUE, "ℹ️"),
-        "SUCCESS": (Colors.GREEN, "✅"),
-        "WARNING": (Colors.YELLOW, "⚠️"),
-        "ERROR": (Colors.RED, "❌"),
-        "THINKING": (Colors.MAGENTA, "🤔"),
-        "EXECUTING": (Colors.CYAN, "⚡"),
-        "FOUND": (Colors.GREEN, "[SCAN]"),
+        "INFO": (Colors.BLUE, "•"),
+        "SUCCESS": (Colors.GREEN, "✓"),
+        "WARNING": (Colors.YELLOW, "!"),
+        "ERROR": (Colors.RED, "✗"),
+        "THINKING": (Colors.MAGENTA, "→"),
+        "EXECUTING": (Colors.CYAN, "*"),
+        "FOUND": (Colors.GREEN, "+"),
     }
     color, prefix = status_config.get(status, (Colors.BLUE, "[INFO]"))
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -310,7 +319,9 @@ def analyze_objective_completion(messages: List[Dict]) -> Tuple[bool, str, Dict]
 
                     # Extract any confidence or completion percentage mentioned
                     confidence_match = re.search(r"(\d+)%", content)
-                    confidence = int(confidence_match.group(1)) if confidence_match else 100
+                    confidence = (
+                        int(confidence_match.group(1)) if confidence_match else 100
+                    )
 
                     return (
                         True,

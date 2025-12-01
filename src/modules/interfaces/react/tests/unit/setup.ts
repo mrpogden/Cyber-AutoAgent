@@ -51,5 +51,28 @@ if (typeof (global as any).window !== 'undefined') {
   });
 }
 
+// Polyfill MessageChannel for react-dom/server in Node VM-based Jest envs
+if (typeof (global as any).MessageChannel === 'undefined') {
+  // Minimal stub; react-dom/server only needs the API shape for scheduling.
+  (global as any).MessageChannel = class {
+    port1 = { postMessage: () => {} };
+    port2 = { postMessage: () => {} };
+  } as any;
+}
+
+// Polyfill TextEncoder/TextDecoder for environments where they are missing
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const util = require('util');
+  if (typeof (global as any).TextEncoder === 'undefined' && util.TextEncoder) {
+    (global as any).TextEncoder = util.TextEncoder;
+  }
+  if (typeof (global as any).TextDecoder === 'undefined' && util.TextDecoder) {
+    (global as any).TextDecoder = util.TextDecoder as any;
+  }
+} catch {
+  // Best-effort only; if util isn't available, tests that depend on it may fail.
+}
+
 // Global test timeout
 jest.setTimeout(10000);

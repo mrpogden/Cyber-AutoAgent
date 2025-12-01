@@ -14,7 +14,7 @@
  * Event Flow: Docker Container → stdout → Event Parser → React Components
  * 
  * @author Cyber-AutoAgent Team
- * @since v0.1.3
+ * @since v0.1.4
  */
 
 import { EventEmitter } from 'events';
@@ -22,6 +22,7 @@ import Dockerode from 'dockerode';
 import { Transform } from 'stream';
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { AssessmentParams } from '../types/Assessment.js';
 import { Config } from '../contexts/ConfigContext.js';
 import { StreamEvent, EventType } from '../types/events.js';
@@ -40,6 +41,41 @@ function sanitizeTargetName(target: string): string {
     .replace(/\s+/g, '_')  // Replace spaces
     .replace(/_+/g, '_')  // Collapse multiple underscores
     .replace(/^_|_$/g, '');  // Trim underscores
+}
+
+/**
+ * Get Docker connection options from the current docker context
+ * Supports alternate docker providers by detecting the socket/host from docker context
+ * @returns Dockerode connection options
+ */
+function getDockerConnectionOptions(): Dockerode.DockerOptions {
+  try {
+    // Get the current docker context
+    const currentContext = execSync('docker context show', { encoding: 'utf8' }).trim();
+
+    // Get full context info as JSON
+    const contextInfo = JSON.parse(
+      execSync(`docker context inspect ${currentContext}`, { encoding: 'utf8' })
+    )[0];
+
+    // Extract socket or host
+    const endpoint = contextInfo?.Endpoints?.docker?.Host;
+
+    if (!endpoint) {
+      // If no endpoint found, fall back to default
+      return {};
+    }
+
+    // Normalize path if it's a unix socket
+    if (endpoint.startsWith('unix://')) {
+      return { socketPath: endpoint.replace('unix://', '') };
+    } else {
+      return { host: endpoint };
+    }
+  } catch (error) {
+    // If docker context commands fail, fall back to default dockerode behavior
+    return {};
+  }
 }
 
 /**
@@ -109,10 +145,11 @@ export class DirectDockerService extends EventEmitter {
 
   /**
    * Initialize the Docker service with connection to Docker daemon
+   * Automatically detects docker context for alternate docker providers
    */
   constructor() {
     super();
-    this.dockerClient = new Dockerode();
+    this.dockerClient = new Dockerode(getDockerConnectionOptions());
   }
 
   /**
@@ -218,6 +255,15 @@ export class DirectDockerService extends EventEmitter {
         `DEV=${config.verbose ? 'true' : 'false'}`,
       );
 
+      // Provider and model configuration
+      // ConfigManager reads from these env vars, not just command-line args
+      if (config.modelProvider) {
+        env.push(`CYBER_AGENT_PROVIDER=${config.modelProvider}`);
+      }
+      if (config.modelId) {
+        env.push(`CYBER_AGENT_LLM_MODEL=${config.modelId}`);
+      }
+
       // AWS credentials
       if (config.awsAccessKeyId && config.awsSecretAccessKey) {
         env.push(`AWS_ACCESS_KEY_ID=${config.awsAccessKeyId}`);
@@ -306,7 +352,6 @@ export class DirectDockerService extends EventEmitter {
       }
       if (config.maxTokens) {
         env.push(`MAX_TOKENS=${config.maxTokens}`);
-        env.push(`CYBER_AGENT_MAX_TOKENS=${config.maxTokens}`);
       }
       if (config.temperature !== undefined) {
         env.push(`CYBER_AGENT_TEMPERATURE=${config.temperature}`);
@@ -320,6 +365,9 @@ export class DirectDockerService extends EventEmitter {
       if (config.reasoningEffort) {
         env.push(`REASONING_EFFORT=${config.reasoningEffort}`);
       }
+      if (config.reasoningVerbosity) {
+        env.push(`REASONING_VERBOSITY=${config.reasoningVerbosity}`);
+      }
       if (config.maxCompletionTokens) {
         env.push(`MAX_COMPLETION_TOKENS=${config.maxCompletionTokens}`);
       }
@@ -330,6 +378,29 @@ export class DirectDockerService extends EventEmitter {
       }
       if (config.evaluationModel) {
         env.push(`CYBER_AGENT_EVALUATION_MODEL=${config.evaluationModel}`);
+      }
+
+      // MCP Servers
+      if (config.mcp.enabled && config.mcp.connections) {
+        env.push("CYBER_MCP_ENABLED=true")
+        env.push(`CYBER_MCP_CONNECTIONS=${JSON.stringify(config.mcp.connections)}`)
+      }
+
+      // Context Management
+      if (config.conversationWindow !== undefined) {
+        env.push(`CYBER_CONVERSATION_WINDOW=${config.conversationWindow}`);
+      }
+      if (config.conversationPreserveFirst !== undefined) {
+        env.push(`CYBER_CONVERSATION_PRESERVE_FIRST=${config.conversationPreserveFirst}`);
+      }
+      if (config.conversationPreserveLast !== undefined) {
+        env.push(`CYBER_CONVERSATION_PRESERVE_LAST=${config.conversationPreserveLast}`);
+      }
+      if (config.toolMaxResultChars !== undefined) {
+        env.push(`CYBER_TOOL_MAX_RESULT_CHARS=${config.toolMaxResultChars}`);
+      }
+      if (config.toolArtifactThreshold !== undefined) {
+        env.push(`CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD=${config.toolArtifactThreshold}`);
       }
 
       // Debug logging: what we're about to send to Docker
@@ -1070,7 +1141,7 @@ export class DirectDockerService extends EventEmitter {
    */
   static async checkDocker(): Promise<boolean> {
     try {
-      const dockerClient = new Dockerode();
+      const dockerClient = new Dockerode(getDockerConnectionOptions());
       await dockerClient.ping();
       return true;
     } catch {
@@ -1298,8 +1369,8 @@ export class DirectDockerService extends EventEmitter {
    * Ensure required Docker resources exist
    */
   static async ensureDockerResources(): Promise<void> {
-    const dockerClient = new Dockerode();
-    
+    const dockerClient = new Dockerode(getDockerConnectionOptions());
+
     // Check if network exists
     try {
       await dockerClient.getNetwork('cyberagent-network').inspect();
@@ -1310,7 +1381,7 @@ export class DirectDockerService extends EventEmitter {
         Driver: 'bridge',
       });
     }
-    
+
     // Check if image exists
     try {
       await dockerClient.getImage('cyber-autoagent:sudo').inspect();

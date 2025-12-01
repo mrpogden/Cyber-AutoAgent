@@ -7,7 +7,6 @@ with the report generation tool to maintain clean architecture and
 avoid code duplication.
 """
 
-import logging
 from typing import Optional
 
 from strands import Agent
@@ -17,9 +16,10 @@ from strands.models.litellm import LiteLLMModel
 from strands.models.ollama import OllamaModel
 
 from modules.config.manager import get_config_manager
+from modules.config.system.logger import get_logger
 from modules.prompts.factory import get_report_agent_system_prompt
 
-logger = logging.getLogger(__name__)
+logger = get_logger("Agents.ReportAgent")
 
 
 class NoOpCallbackHandler(PrintingCallbackHandler):
@@ -70,21 +70,23 @@ class ReportGenerator:
 
             # Harden Bedrock client similar to main agent to avoid timeouts
             from botocore.config import Config as BotocoreConfig
+
             boto_config = BotocoreConfig(
                 region_name=cfg.get_server_config("bedrock").region,
                 retries={"max_attempts": 10, "mode": "adaptive"},
-                read_timeout=420,
-                connect_timeout=60,
+                read_timeout=1200,
+                connect_timeout=1200,
                 max_pool_connections=100,
             )
 
-            # Set appropriate token limits based on the model
-            if "claude-3-5-sonnet" in mid or "claude-3-5-haiku" in mid:
-                # Claude 3.5 models have ~8k token output limits
-                max_tokens = 8000
-            else:
-                # Default to 32k for non-3.5 models to satisfy provider limits
+            # Use the same max_tokens budget as the primary Bedrock model
+            try:
+                max_tokens = int(getattr(llm_cfg, "max_tokens", 0) or 0)
+                if max_tokens <= 0:
+                    raise ValueError
+            except Exception:
                 max_tokens = 32000
+
             # Ensure explicit region to avoid environment inconsistencies
             region = cfg.get_server_config("bedrock").region
             model = BedrockModel(
@@ -104,7 +106,23 @@ class ReportGenerator:
             llm_cfg = cfg.get_llm_config("litellm")
             # Only override if explicitly provided, otherwise use config
             mid = model_id if model_id else llm_cfg.model_id
-            model = LiteLLMModel(model_id=mid)
+            # Pass both token params - LiteLLM drop_params removes unsupported one
+            try:
+                llm_max = int(getattr(llm_cfg, "max_tokens", 0) or 0)
+                if llm_max <= 0:
+                    raise ValueError
+            except Exception:
+                llm_max = 4000
+            params = {
+                "temperature": 0.3,
+                "max_tokens": llm_max,
+                "max_completion_tokens": llm_max,
+            }
+            client_args = {
+                "num_retries": 5,
+                "timeout": 600,
+            }
+            model = LiteLLMModel(model_id=mid, params=params, client_args=client_args)
 
         # Import the report builder tool
         from modules.tools.report_builder import build_report_sections

@@ -1,6 +1,6 @@
 services:
   cyber-autoagent:
-    image: cyber-autoagent:latest
+    image: caa:0.1.4
     build:
       context: ../
       dockerfile: docker/Dockerfile
