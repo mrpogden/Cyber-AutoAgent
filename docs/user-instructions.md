@@ -309,7 +309,7 @@ Examples:
 This is an example configuration for the HackTheBox CTF MCP server. Export your API key before running.
 
 ```shell
-export HTB_TOKEN=xxx.yyy.zzz
+export HTB_MCP_TOKEN=xxx.yyy.zzz
 ```
 
 ```json
@@ -322,7 +322,7 @@ export HTB_TOKEN=xxx.yyy.zzz
             "transport": "sse",
             "server_url": "https://mcp.ai.hackthebox.com/v1/ctf/sse",
             "plugins": ["ctf"],
-            "headers": {"Authorization": "Bearer ${HTB_TOKEN}"}
+            "headers": {"Authorization": "Bearer ${HTB_MCP_TOKEN}"}
          }
       ]
    }

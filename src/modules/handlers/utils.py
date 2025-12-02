@@ -10,6 +10,8 @@ import json
 import os
 import re
 import shutil
+import sys
+import tomllib
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -152,7 +154,7 @@ class Colors:
     # Docker allocates a pseudo-TTY when -t flag is used, which makes isatty() return True
     # We also respect FORCE_COLOR env var which is set in docker-compose.yml
     _force_color = os.environ.get("FORCE_COLOR", "").lower() in ("1", "true", "yes")
-    _is_tty = hasattr(os.sys.stdout, "isatty") and os.sys.stdout.isatty()
+    _is_tty = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
     _is_terminal = _is_tty or _force_color
 
     # Define colors only if outputting to terminal or colors are forced
@@ -190,8 +192,10 @@ def print_banner():
         r"╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ",
     ]
 
+    with open("pyproject.toml", "rb") as f:
+        version = tomllib.load(f).get("project", {}).get("version", "???")
+
     subtitle = "Full Spectrum Cyber Operations"
-    version = "v0.1.4"
 
     # Terminal Pro gradient colors (24-bit RGB ANSI codes)
     # Matrix green → Cyan → Apple blue (Gemini-inspired multi-color gradient)

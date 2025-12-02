@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caa"
-version = "0.1.4"
+version = "0.1.5"
 description = "Cyber-AutoAgent: Autonomous AI agent for ethical security assessments"
 readme = "README.md"
 authors = [
-    {name = "Cyber-AutoAgent Team", email = "aaron.weston.brown@gmail.com"}
+    {name = "Patrick Double", email = "pat@patdouble.com"},
+    {name = "Aaron Brown"}
 ]
 license = {text = "MIT"}
 keywords = ["cybersecurity", "penetration-testing", "autonomous", "ai-agent", "security-assessment"]
@@ -57,6 +58,8 @@ dependencies = [
     "sympy>=1.13.0",
     "angr>=9.2.0",
     "r2pipe>=1.9.0",
+    "sentence-transformers>=5.1.2",
+    "standard-distutils>=3.11.9",
 ]
 
 [project.optional-dependencies]

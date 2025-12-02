@@ -1,37 +1,71 @@
 # Dockerfile for Cyber-AutoAgent (Kali Rolling base)
-# Single-stage build on Kali to keep environment consistent with pentesting tools
+
+ARG APT_PROXY=http://192.168.1.29:3142
+
+FROM --platform=$BUILDPLATFORM golang:1.25 AS gobuild
+ARG TARGETARCH
+ARG BUILDPLATFORM
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GOOS=linux GOARCH=$TARGETARCH
+COPY docker/apt_proxy_configure.sh /tmp/
+RUN /tmp/apt_proxy_configure.sh && \
+    apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config git ca-certificates &&\
+    if [ "$BUILDPLATFORM" = "linux/amd64" ]; then apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross; fi &&\
+    if [ "$BUILDPLATFORM" = "linux/arm64" ]; then apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu g++-x86-64-linux-gnu libc6-dev-amd64-cross; fi
+ENV CGO_ENABLED=1
+ADD docker/packages-go.sh /tmp
+RUN /tmp/packages-go.sh
 
 FROM kalilinux/kali-rolling
 
 LABEL org.opencontainers.image.title="Cyber-AutoAgent"
 LABEL org.opencontainers.image.description="Autonomous AI agent for ethical security assessments"
-LABEL org.opencontainers.image.version="0.1.4"
+LABEL org.opencontainers.image.version="0.1.5"
 LABEL org.opencontainers.image.source="https://github.com/cyber-autoagent/cyber-autoagent"
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system packages, Python, and common security tools
+COPY docker/apt_proxy_configure.sh docker/apt_proxy_clean.sh /tmp/
+
 RUN set -eux; \
+    /tmp/apt_proxy_configure.sh && \
     mirrors="ftp.acc.umu.se/mirror/kali.org/kali mirror.math.princeton.edu/pub/kali kali.mirror.garr.it/mirrors/kali mirror.pit.teraswitch.com/kali"; \
     success=0; \
     for mirror in $mirrors; do \
         echo "deb http://$mirror kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list; \
-        if apt-get update; then \
+        if apt update; then \
             echo "Using Kali mirror: $mirror"; \
             success=1; \
             break; \
         fi; \
     done; \
     if [ "$success" -ne 1 ]; then \
-        echo "ERROR: apt-get update failed for all configured mirrors" >&2; \
+        echo "ERROR: apt update failed for all configured mirrors" >&2; \
+        exit 1; \
+    fi;
+
+RUN set -eux; \
+    mirrors="ftp.acc.umu.se/mirror/kali.org/kali mirror.math.princeton.edu/pub/kali kali.mirror.garr.it/mirrors/kali mirror.pit.teraswitch.com/kali"; \
+    success=0; \
+    for mirror in $mirrors; do \
+        echo "deb http://$mirror kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list; \
+        if apt update; then \
+            echo "Using Kali mirror: $mirror"; \
+            success=1; \
+            break; \
+        fi; \
+    done; \
+    if [ "$success" -ne 1 ]; then \
+        echo "ERROR: apt update failed for all configured mirrors" >&2; \
         exit 1; \
     fi; \
-    apt-get install -y --no-install-recommends \
+    apt install -y --no-install-recommends \
     python3 \
     python3-venv \
     python3-pip \
     python-is-python3 \
+    pipx \
     # Java runtime for ZAP/Burp
     openjdk-21-jre-headless \
     # Binary analysis tools
@@ -39,7 +73,6 @@ RUN set -eux; \
     # Security tools
     nmap \
     sqlmap \
-    gobuster \
     curl \
     netcat-traditional \
     tcpdump \
@@ -62,8 +95,11 @@ RUN set -eux; \
     # Additional essential tools
     jq \
     unzip \
+    unrar \
     tree \
     sudo \
+    file \
+    xxd \
     # Web scanners
     nikto \
     whatweb \
@@ -114,6 +150,8 @@ RUN set -eux; \
     hydra \
     medusa \
     ncrack \
+    hashcat \
+    john \
     # Content and metadata
     libimage-exiftool-perl \
     cewl \
@@ -133,6 +171,7 @@ RUN set -eux; \
     uniscan \
     dirsearch \
     skipfish \
+    enum4linux \
     # Offensive frameworks
     metasploit-framework \
     # Go toolchain for ProjectDiscovery/tomnomnom tools
@@ -165,7 +204,7 @@ RUN set -eux; \
     foremost \
     # Ruby for zsteg/whatweb
     ruby-full \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    && apt clean && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Provide symlinks from Ruby vendor_ruby so WhatWeb runs without error
 RUN set -eux; \
@@ -177,63 +216,17 @@ RUN set -eux; \
       fi; \
     fi
 
+COPY --from=gobuild /usr/local/bin/* /usr/local/bin/
+
 # Install uv for fast dependency management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-
-RUN useradd --create-home --shell /bin/bash cyberagent && \
-    usermod -aG sudo cyberagent && \
-    echo 'cyberagent ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
-
-# Set working directory
-WORKDIR /app
-
-# Copy dependency descriptors and source
-COPY pyproject.toml ./
-COPY uv.lock* ./
-COPY src/ ./src/
-
-# Install Python dependencies into a local venv
-RUN uv sync --no-dev && \
-    mkdir -p /app/evidence /app/logs /home/cyberagent/go && \
-    chmod 755 /app/evidence /app/logs && \
-    chown -R cyberagent:cyberagent /home/cyberagent/go
-
-# Install and build React terminal interface (default UI)
-RUN cd /app/src/modules/interfaces/react && \
-    npm install && \
-    npm run build && \
-    chown -R cyberagent:cyberagent /app/src/modules/interfaces/react
-
-# Install chromium browser for playwright to use
-RUN env PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="debian13-$(dpkg --print-architecture | sed 's/amd/x/')" \
-    PLAYWRIGHT_BROWSERS_PATH=/home/cyberagent/.cache/ms-playwright \
-    uv run playwright install chromium --with-deps && \
-    chown -R cyberagent:cyberagent /home/cyberagent/.cache && \
-    CHROME_BIN=$(find /home/cyberagent/.cache/ms-playwright -type f \( -name chrome -o -name chromium \) | head -n 1) && \
-    if [ -n "$CHROME_BIN" ]; then mkdir -p /usr/lib/chromium && ln -sf "$CHROME_BIN" /usr/lib/chromium/chromium; fi && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
-
-# Environment
-ENV GOPATH="/home/cyberagent/go"
-ENV GOCACHE="/home/cyberagent/go/.cache"
-ENV PATH="/app/.venv/bin:/home/cyberagent/go/bin:$PATH"
-ENV PLAYWRIGHT_BROWSERS_PATH="/home/cyberagent/.cache/ms-playwright"
-ENV PYTHONPATH="/usr/lib/python3/dist-packages:/app/src"
-
-# Pre-install Go-based recon tools (mix of go build and prebuilt binaries)
-# assetfinder (tomnomnom) builds quickly from source
-RUN go install github.com/tomnomnom/assetfinder@latest && \
-    go install github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest && \
-    go install github.com/nicocha30/ligolo-ng/cmd/agent@latest && \
-    go install github.com/nicocha30/ligolo-ng/cmd/proxy@latest
+COPY --from=ghcr.io/astral-sh/uv:0.9.14 /uv /usr/local/bin/uv
 
 # Install Ruby gems
 RUN gem install zsteg
 
 # Install additional security tools
 # GraphQL Clairvoyance - GraphQL schema enumeration
-RUN git clone https://github.com/nikitastupin/clairvoyance.git /opt/clairvoyance || true && \
+RUN git clone --depth=1 https://github.com/nikitastupin/clairvoyance.git /opt/clairvoyance || true && \
     if [ -d /opt/clairvoyance ]; then \
       cd /opt/clairvoyance && \
       python3 -m venv venv && \
@@ -242,19 +235,19 @@ RUN git clone https://github.com/nikitastupin/clairvoyance.git /opt/clairvoyance
     fi
 
 # JWT Tool - JWT analysis and manipulation
-RUN git clone https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool || true && \
+RUN git clone --depth=1 https://github.com/ticarpi/jwt_tool.git /opt/jwt_tool || true && \
     if [ -f /opt/jwt_tool/jwt_tool.py ]; then chmod +x /opt/jwt_tool/jwt_tool.py; fi
 
 # tplmap - Server-Side Template Injection scanner
-RUN git clone https://github.com/epinna/tplmap.git /opt/tplmap || true && \
+RUN git clone --depth=1 https://github.com/epinna/tplmap.git /opt/tplmap || true && \
     if [ -f /opt/tplmap/tplmap.py ]; then chmod +x /opt/tplmap/tplmap.py; fi
 
 # Gopherus - SSRF payload generator
-RUN git clone https://github.com/tarunkant/Gopherus.git /opt/gopherus || true && \
+RUN git clone --depth=1 https://github.com/tarunkant/Gopherus.git /opt/gopherus || true && \
     if [ -f /opt/gopherus/gopherus.py ]; then chmod +x /opt/gopherus/gopherus.py; fi
 
 # PHPGGC - PHP Generic Gadget Chains
-RUN git clone https://github.com/ambionics/phpggc.git /opt/phpggc || true && \
+RUN git clone --depth=1 https://github.com/ambionics/phpggc.git /opt/phpggc || true && \
     if [ -f /opt/phpggc/phpggc ]; then chmod +x /opt/phpggc/phpggc; fi
 
 # Ysoserial - Java Deserialization (download jar)
@@ -272,14 +265,8 @@ RUN ([ -d /opt/clairvoyance ] && echo '#!/bin/bash\ncd /opt/clairvoyance && sour
     ([ -f /opt/phpggc/phpggc ] && ln -sf /opt/phpggc/phpggc /usr/local/bin/phpggc) || true && \
     (echo '#!/bin/bash\njava -jar /opt/ysoserial/ysoserial.jar "$@"' > /usr/local/bin/ysoserial && chmod +x /usr/local/bin/ysoserial) || true
 
-# Install additional high-impact tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    hashcat \
-    enum4linux \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
 # Install NetExec (modern CrackMapExec) from source
-RUN git clone https://github.com/Pennyw0rth/NetExec.git /opt/netexec && \
+RUN git clone --depth=1 https://github.com/Pennyw0rth/NetExec.git /opt/netexec && \
     cd /opt/netexec && \
     pip3 install --break-system-packages . && \
     ln -sf /opt/netexec/nxc.py /usr/local/bin/netexec || true
@@ -288,19 +275,10 @@ RUN git clone https://github.com/Pennyw0rth/NetExec.git /opt/netexec && \
 RUN gem install evil-winrm
 
 # Install XSStrike
-RUN git clone https://github.com/s0md3v/XSStrike.git /opt/xsstrike && \
+RUN git clone --depth=1 https://github.com/s0md3v/XSStrike.git /opt/xsstrike && \
     pip3 install --break-system-packages -r /opt/xsstrike/requirements.txt && \
     chmod +x /opt/xsstrike/xsstrike.py && \
     ln -sf /opt/xsstrike/xsstrike.py /usr/local/bin/xsstrike
-
-# Install DalFox (Go-based XSS scanner)
-RUN go install github.com/hahwul/dalfox/v2@latest
-
-# Install Chisel (Tunneling)
-RUN go install github.com/jpillora/chisel@latest
-
-# Install Kerbrute (Kerberos enumeration)
-RUN go install github.com/ropnop/kerbrute@latest
 
 # Install PEASS-ng (Privilege Escalation)
 RUN mkdir -p /opt/peass && \
@@ -312,70 +290,87 @@ RUN mkdir -p /opt/peass && \
 RUN curl https://sliver.sh/install | bash || true
 
 # Install BloodHound Python (AD Analysis)
-RUN pip3 install --break-system-packages bloodhound
+RUN pipx install bloodhound
 
 # Install Certipy (AD CS Abuse)
-RUN pip3 install --break-system-packages certipy-ad
+RUN pipx install certipy-ad
 
 # Install Coercer (AD Coercion)
-RUN pip3 install --break-system-packages coercer
+RUN pipx install coercer
 
 # Install Responder (LLMNR/NBT-NS Poisoning)
-RUN git clone https://github.com/lgandx/Responder.git /opt/responder && \
+RUN git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder && \
     ln -sf /opt/responder/Responder.py /usr/local/bin/responder
 
 # Install TruffleHog (Secret Scanning)
 RUN curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
 
 # Install GitTools (Git Dumper/Extractor)
-RUN git clone https://github.com/internetwache/GitTools.git /opt/gittools && \
+RUN git clone --depth=1 https://github.com/internetwache/GitTools.git /opt/gittools && \
     chmod +x /opt/gittools/Dumper/gitdumper.sh /opt/gittools/Extractor/extractor.sh && \
     ln -sf /opt/gittools/Dumper/gitdumper.sh /usr/local/bin/gitdumper && \
     ln -sf /opt/gittools/Extractor/extractor.sh /usr/local/bin/gitextractor
 
 # Install PwnCat-CS (Advanced Reverse Shell Handler)
-RUN pip3 install --break-system-packages pwncat-cs
+RUN pipx install pwncat-cs
 
 # Install RsaCtfTool (RSA Attacks) - requires GMP/MPFR libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt update && apt install -y --no-install-recommends \
     libgmp-dev libmpfr-dev libmpc-dev && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    git clone https://github.com/RsaCtfTool/RsaCtfTool.git /opt/rsactftool && \
+    apt clean && rm -rf /var/lib/apt/lists/* && \
+    git clone --depth=1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/rsactftool && \
     cd /opt/rsactftool && \
     pip3 install --break-system-packages -r requirements.txt && \
     ln -sf /opt/rsactftool/RsaCtfTool.py /usr/local/bin/rsactftool || true
 
 # Install Volatility3 (Memory Forensics) - Optional
-RUN git clone https://github.com/volatilityfoundation/volatility3.git /opt/volatility3 && \
+RUN git clone --depth=1 --depth=1 https://github.com/volatilityfoundation/volatility3.git /opt/volatility3 && \
     cd /opt/volatility3 && \
     pip3 install --break-system-packages . && \
     ln -sf /opt/volatility3/vol.py /usr/local/bin/vol || true
 
-# httpx and katana from ProjectDiscovery can pull large dependency graphs; use prebuilt binaries instead
-RUN set -eux; \
-    arch=$(uname -m); \
-    if [ "$arch" = "x86_64" ]; then platform="linux_amd64"; \
-    elif [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then platform="linux_arm64"; \
-    else platform="linux_amd64"; fi; \
-    KATANA_URL=$(curl -s https://api.github.com/repos/projectdiscovery/katana/releases/latest \
-      | grep -Eo '"browser_download_url"\s*:\s*"[^"]*' | cut -d '"' -f4 \
-      | grep -E "${platform}\\.zip$" | head -n1); \
-    HTTPX_URL=$(curl -s https://api.github.com/repos/projectdiscovery/httpx/releases/latest \
-      | grep -Eo '"browser_download_url"\s*:\s*"[^"]*' | cut -d '"' -f4 \
-      | grep -E "${platform}\\.zip$" | head -n1); \
-    echo "Fetching: $KATANA_URL"; \
-    echo "Fetching: $HTTPX_URL"; \
-    wget -qO /tmp/katana.zip "$KATANA_URL"; \
-    wget -qO /tmp/httpx.zip "$HTTPX_URL"; \
-    rm -rf /tmp/katana_extracted /tmp/httpx_extracted; \
-    mkdir -p /tmp/katana_extracted /tmp/httpx_extracted; \
-    unzip -q /tmp/katana.zip -d /tmp/katana_extracted || true; \
-    unzip -q /tmp/httpx.zip -d /tmp/httpx_extracted || true; \
-    # Find and install binaries
-    find /tmp/katana_extracted -type f -name katana -exec mv {} /usr/local/bin/katana \; || true; \
-    find /tmp/httpx_extracted -type f -name httpx -exec mv {} /usr/local/bin/httpx \; || true; \
-    chmod +x /usr/local/bin/katana /usr/local/bin/httpx || true; \
-    rm -rf /tmp/katana_extracted /tmp/httpx_extracted /tmp/katana.zip /tmp/httpx.zip
+RUN useradd --create-home --shell /bin/bash cyberagent && \
+    usermod -aG sudo cyberagent && \
+    echo 'cyberagent ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers && \
+    mkdir -p /app/evidence /app/logs /home/cyberagent/go && \
+    chmod 755 /app/evidence /app/logs && \
+    chown -R cyberagent:cyberagent /home/cyberagent/go
+
+# Set working directory
+WORKDIR /app
+
+# Copy dependency descriptors and source
+COPY pyproject.toml ./
+COPY uv.lock* ./
+COPY src/ ./src/
+
+# Install Python dependencies into a local venv
+RUN uv sync --no-dev
+
+# Install and build React terminal interface (default UI)
+RUN cd /app/src/modules/interfaces/react && \
+    npm install && \
+    npm run build && \
+    chown -R cyberagent:cyberagent /app/src/modules/interfaces/react
+
+# Install chromium browser for playwright to use
+RUN env PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="debian13-$(dpkg --print-architecture | sed 's/amd/x/')" \
+    PLAYWRIGHT_BROWSERS_PATH=/home/cyberagent/.cache/ms-playwright \
+    uv run playwright install chromium --with-deps && \
+    chown -R cyberagent:cyberagent /home/cyberagent/.cache && \
+    CHROME_BIN=$(find /home/cyberagent/.cache/ms-playwright -type f \( -name chrome -o -name chromium \) | head -n 1) && \
+    if [ -n "$CHROME_BIN" ]; then mkdir -p /usr/lib/chromium && ln -sf "$CHROME_BIN" /usr/lib/chromium/chromium; fi && \
+    apt clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+RUN /tmp/apt_proxy_clean.sh
+
+# Environment
+ENV GOPATH="/home/cyberagent/go"
+ENV GOCACHE="/home/cyberagent/go/.cache"
+ENV PATH="/app/.venv/bin:/home/cyberagent/go/bin:$PATH"
+ENV PLAYWRIGHT_BROWSERS_PATH="/home/cyberagent/.cache/ms-playwright"
+ENV PYTHONPATH="/usr/lib/python3/dist-packages:/app/src"
 
 # Persist important directories
 VOLUME ["/app/evidence", "/app/logs"]

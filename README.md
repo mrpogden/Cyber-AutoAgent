@@ -12,16 +12,6 @@
 ![GitHub stars](https://img.shields.io/github/stars/westonbrown/Cyber-AutoAgent?style=flat-square)
 ![GitHub forks](https://img.shields.io/github/forks/westonbrown/Cyber-AutoAgent?style=flat-square)
 
-
-# ⚠️ PROJECT ARCHIVED
-
-Cyber-AutoAgent started as an experimental side project to explore autonomous offensive security agents and black box pentesting. After achieving 85% on the XBOW valdiation benchmark and building an engaged community, it became clear this work requires dedicated full-time focus to reach production-grade maturity.
-
-Due to time constraints with other commitments, I've made the decision to archive this repository rather than let it stagnate with sporadic updates.
-
-Thanks to everyone who contributed, tested, and supported this experiment. Keep pushing the boundaries of what's possible with agentic AI in cybersecurity. 
-
-
 **[!] EXPERIMENTAL SOFTWARE - USE ONLY IN AUTHORIZED, SAFE, SANDBOXED ENVIRONMENTS [!]**
 
 <p>

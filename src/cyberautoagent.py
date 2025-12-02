@@ -12,7 +12,8 @@ evidence collection capabilities.
 For educational and authorized security testing purposes only.
 Ensure you have explicit permission before testing any targets.
 
-Author: Aaron Brown
+Author: Patrick Double
+Original Author: Aaron Brown
 License: MIT
 """
 
