@@ -318,6 +318,9 @@ export class DirectDockerService extends EventEmitter {
       if (config.ollamaHost) {
         env.push(`OLLAMA_HOST=${config.ollamaHost}`);
       }
+      if (config.ollamaTimeout) {
+        env.push(`OLLAMA_TIMEOUT=${config.ollamaTimeout}`);
+      }
 
       // LiteLLM configuration
       if (config.openaiApiKey) {

@@ -37,7 +37,7 @@ class TestModelConfigs:
         """Test remote model configuration defaults"""
         config = get_default_model_configs("bedrock")
 
-        assert "us.anthropic.claude" in config["llm_model"]
+        assert "global.anthropic.claude" in config["llm_model"]
         assert config["embedding_model"] == "amazon.titan-embed-text-v2:0"
         assert config["embedding_dims"] == 1024
 

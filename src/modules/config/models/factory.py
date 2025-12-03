@@ -554,6 +554,9 @@ def create_ollama_model(
         model_id=config["model_id"],
         temperature=llm_temp,
         max_tokens=llm_max,
+        ollama_client_args={
+            "timeout": config["timeout"],
+        },
     )
 
 

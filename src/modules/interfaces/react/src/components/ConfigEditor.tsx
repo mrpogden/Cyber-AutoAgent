@@ -105,6 +105,7 @@ const CONFIG_FIELDS: ConfigField[] = [
     description: 'Override runtime URL for private/VPC SageMaker endpoints.'
   },
   { key: 'ollamaHost', label: 'Ollama Host', type: 'text', section: 'Models' },
+  { key: 'ollamaTimeout', label: 'Ollama Timeout', type: 'number', section: 'Models' },
   { key: 'openaiApiKey', label: 'OpenAI API Key', type: 'password', section: 'Models' },
   { key: 'anthropicApiKey', label: 'Anthropic API Key', type: 'password', section: 'Models' },
   { key: 'geminiApiKey', label: 'Gemini API Key', type: 'password', section: 'Models' },
@@ -737,7 +738,7 @@ export const ConfigEditor: React.FC<ConfigEditorProps> = ({ onClose }) => {
           ];
           return bedrockFields.includes(f.key);
         } else if (config.modelProvider === 'ollama') {
-          return ['ollamaHost', 'temperature', 'maxTokens'].includes(f.key);
+          return ['ollamaHost', 'ollamaTimeout', 'temperature', 'maxTokens'].includes(f.key);
         } else if (config.modelProvider === 'litellm') {
           const litellmFields = [
             'openaiApiKey', 'anthropicApiKey', 'geminiApiKey', 'xaiApiKey', 'cohereApiKey',

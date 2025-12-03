@@ -87,6 +87,7 @@ class CyberAgentEvaluator:
         if server_type == "ollama":
             # Local mode using Ollama
             ollama_host = config_manager.getenv("OLLAMA_HOST", "http://localhost:11434")
+            # Should we configure timeout from OLLAMA_TIMEOUT ?
             langchain_chat = ChatOllama(
                 model=config_manager.getenv(
                     "RAGAS_EVALUATOR_MODEL", server_config.evaluation.llm.model_id

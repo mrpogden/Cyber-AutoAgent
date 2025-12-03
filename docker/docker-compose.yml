@@ -31,6 +31,7 @@ services:
 
       # Ollama Configuration (Ollama Provider)
       - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT}
 
       # LiteLLM Provider API Keys
       - OPENAI_API_KEY=${OPENAI_API_KEY}

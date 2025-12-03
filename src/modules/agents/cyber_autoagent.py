@@ -871,6 +871,19 @@ Available {config.module} MCP tools:
         tools_list.append(list_mcp_tools_wrapper(mcp_tools))
         tools_list.extend(mcp_tools)
         agent_logger.info("Injected %d MCP tools into agent", len(mcp_tools))
+        for mcp_tool in mcp_tools:
+            tool_desc = " ".join(map(lambda s: s.strip(), mcp_tool.tool_spec.get('description')[:128].splitlines())).strip()
+            # Emit structured event for React UI
+            tool_event = {
+                "type": "tool_available",
+                "timestamp": datetime.now().isoformat(),
+                "tool_name": mcp_tool.tool_name,
+                "description": tool_desc,
+                "status": "available",
+                "binary": "MCP",
+                "path": "MCP",
+            }
+            print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
 
     agent_logger.debug("Creating autonomous agent")
 

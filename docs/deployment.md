@@ -302,29 +302,30 @@ export CYBER_CONTEXT_WINDOW_FALLBACKS='[
 
 ### Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `CYBER_AGENT_PROVIDER` | Provider choice (bedrock/ollama/litellm) | No (auto-detected) |
-| `CYBER_AGENT_LLM_MODEL` | Main LLM model ID | Yes |
-| `CYBER_AGENT_EMBEDDING_MODEL` | Embedding model ID | No (provider default) |
-| `REASONING_EFFORT` | Reasoning effort (low/medium/high) | No (default: medium) |
-| `CYBER_LLM_MAX_TOKENS` | Override LLM max tokens | No (models.dev default) |
-| `CYBER_SWARM_MAX_TOKENS` | Override specialist max tokens | No (models.dev default) |
-| `CYBER_CONTEXT_WINDOW` | Override prompt token limit | No (auto-detected) |
-| `AWS_ACCESS_KEY_ID` | AWS credentials for Bedrock | For Bedrock provider |
-| `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock | For Bedrock provider |
-| `AWS_REGION` | AWS region (default: us-east-1) | For Bedrock provider |
-| `OLLAMA_HOST` | Ollama API endpoint | For Ollama provider |
-| `AZURE_API_KEY` | Azure OpenAI API key | For Azure/LiteLLM |
-| `AZURE_API_BASE` | Azure endpoint URL | For Azure/LiteLLM |
-| `AZURE_API_VERSION` | Azure API version | For Azure/LiteLLM |
-| `MEM0_API_KEY` | Mem0 Platform API key | For cloud memory backend |
-| `MEM0_LLM_MODEL` | Memory system LLM | No (auto-aligned) |
-| `OPENSEARCH_HOST` | OpenSearch endpoint | For OpenSearch memory backend |
-| `LANGFUSE_HOST` | Langfuse observability endpoint | For observability |
-| `LANGFUSE_PUBLIC_KEY` | Langfuse API public key | For observability |
-| `LANGFUSE_SECRET_KEY` | Langfuse API secret key | For observability |
-| `ENABLE_AUTO_EVALUATION` | Enable automatic Ragas evaluation | For evaluation |
+| Variable                      | Description                              | Required                      |
+|-------------------------------|------------------------------------------|-------------------------------|
+| `CYBER_AGENT_PROVIDER`        | Provider choice (bedrock/ollama/litellm) | No (auto-detected)            |
+| `CYBER_AGENT_LLM_MODEL`       | Main LLM model ID                        | Yes                           |
+| `CYBER_AGENT_EMBEDDING_MODEL` | Embedding model ID                       | No (provider default)         |
+| `REASONING_EFFORT`            | Reasoning effort (low/medium/high)       | No (default: medium)          |
+| `CYBER_LLM_MAX_TOKENS`        | Override LLM max tokens                  | No (models.dev default)       |
+| `CYBER_SWARM_MAX_TOKENS`      | Override specialist max tokens           | No (models.dev default)       |
+| `CYBER_CONTEXT_WINDOW`        | Override prompt token limit              | No (auto-detected)            |
+| `AWS_ACCESS_KEY_ID`           | AWS credentials for Bedrock              | For Bedrock provider          |
+| `AWS_SECRET_ACCESS_KEY`       | AWS credentials for Bedrock              | For Bedrock provider          |
+| `AWS_REGION`                  | AWS region (default: us-east-1)          | For Bedrock provider          |
+| `OLLAMA_HOST`                 | Ollama API endpoint                      | For Ollama provider           |
+| `OLLAMA_TIMEOUT`              | Ollama API timeout in seconds            | No (default: 120)             |
+| `AZURE_API_KEY`               | Azure OpenAI API key                     | For Azure/LiteLLM             |
+| `AZURE_API_BASE`              | Azure endpoint URL                       | For Azure/LiteLLM             |
+| `AZURE_API_VERSION`           | Azure API version                        | For Azure/LiteLLM             |
+| `MEM0_API_KEY`                | Mem0 Platform API key                    | For cloud memory backend      |
+| `MEM0_LLM_MODEL`              | Memory system LLM                        | No (auto-aligned)             |
+| `OPENSEARCH_HOST`             | OpenSearch endpoint                      | For OpenSearch memory backend |
+| `LANGFUSE_HOST`               | Langfuse observability endpoint          | For observability             |
+| `LANGFUSE_PUBLIC_KEY`         | Langfuse API public key                  | For observability             |
+| `LANGFUSE_SECRET_KEY`         | Langfuse API secret key                  | For observability             |
+| `ENABLE_AUTO_EVALUATION`      | Enable automatic Ragas evaluation        | For evaluation                |
 
 ### Kubernetes Deployment
 

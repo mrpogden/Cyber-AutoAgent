@@ -49,6 +49,7 @@ from modules.config.system.validation import validate_provider
 from modules.config.providers.bedrock_config import get_default_region
 from modules.config.providers.ollama_config import (
     get_ollama_host as _get_ollama_host_from_env,
+    get_ollama_timeout as _get_ollama_timeout_from_env,
 )
 from modules.config.providers.litellm_config import (
     align_litellm_defaults,
@@ -226,6 +227,7 @@ class ConfigManager:
         return {
             "model_id": model_id,
             "host": self.get_ollama_host(),
+            "timeout": self.get_ollama_timeout(),
             "temperature": llm_config.temperature,
             "max_tokens": llm_config.max_tokens,
         }
@@ -773,6 +775,10 @@ class ConfigManager:
     def get_ollama_host(self) -> str:
         """Determine appropriate Ollama host based on environment."""
         return _get_ollama_host_from_env(self.env)
+
+    def get_ollama_timeout(self) -> float:
+        """Get Ollama timeout."""
+        return _get_ollama_timeout_from_env(self.env)
 
     def set_environment_variables(self, server: str) -> None:
         """Set environment variables for backward compatibility."""
