@@ -8,6 +8,7 @@ output formatting, and message analysis.
 
 import json
 import os
+import pathlib
 import re
 import shutil
 import sys
@@ -192,8 +193,11 @@ def print_banner():
         r"╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ",
     ]
 
-    with open("pyproject.toml", "rb") as f:
-        version = tomllib.load(f).get("project", {}).get("version", "???")
+    try:
+        with open(pathlib.Path(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "pyproject.toml"), "rb") as f:
+            version = tomllib.load(f).get("project", {}).get("version", "???")
+    except IOError:
+        version = "???"
 
     subtitle = "Full Spectrum Cyber Operations"
 
