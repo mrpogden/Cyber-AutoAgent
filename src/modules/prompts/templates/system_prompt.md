@@ -101,7 +101,7 @@ Operation-specific termination details in <termination_policy> section
 </termination>
 
 <tools_and_capabilities>
-Check startup for available tools (✓) vs unavailable (○). Install missing tools via shell/python_repl as needed.
+Run the `tool_catalog` tool for a full list of available tools. Install missing tools via shell/python_repl as needed.
 - Package installation: `apt install [tool]` or `pip install [package]` (no sudo needed)
 - External intel: use http_request to query NVD/CVE, Exploit‑DB, vendor advisories, Shodan/Censys, VirusTotal; save request/response artifacts and cite them in Proof Packs.
 - Commands with verbose output (sqlmap dump, nmap -A, nikto): Save full output to artifacts, extract only relevant fields for context

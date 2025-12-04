@@ -174,7 +174,10 @@ def print_banner():
     """Display operation banner with neon cyberpunk gradient colors."""
     import os
 
-    if os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes"):
+    if (
+            os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes")
+            or os.getenv("CYBER_UI_MODE", "cli").lower() == "react"
+    ):
         return
 
     banner_lines = [
@@ -250,7 +253,10 @@ def print_section(title, content, color=Colors.BLUE, emoji=""):
     """Print formatted section with optional emoji."""
     import os
 
-    if os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes"):
+    if (
+            os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes")
+            or os.getenv("CYBER_UI_MODE", "cli").lower() == "react"
+    ):
         return
 
     # Print section for CLI mode
@@ -264,7 +270,10 @@ def print_status(message, status="INFO"):
     """Print status message with color coding and emojis."""
     import os
 
-    if os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes"):
+    if (
+            os.getenv("CYBERAGENT_NO_BANNER", "").lower() in ("1", "true", "yes")
+            or os.getenv("CYBER_UI_MODE", "cli").lower() == "react"
+    ):
         return
 
     # Print status for CLI mode - professional symbols only

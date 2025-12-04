@@ -1,5 +1,5 @@
 """
-Lists the full catalog of MCP tools.
+MCP tool integration.
 """
 import asyncio
 import json
@@ -7,17 +7,24 @@ import os
 import re
 import threading
 import time
+import atexit
+import signal
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, cast
 
 from mcp.client.session import ClientSession
-from strands import tool
+from mcp import StdioServerParameters, stdio_client
+from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.sse import sse_client
+
 from strands.types.exceptions import MCPClientInitializationError
 from strands.types.tools import AgentTool, ToolGenerator, ToolResult, ToolSpec, ToolUse
 from strands.tools.mcp.mcp_client import MCPClient
 
+from modules.config import AgentConfig, ServerConfig
 from modules.config.system.logger import get_logger
-from modules.handlers.core import sanitize_target_name
+from modules.handlers.utils import sanitize_target_name, get_output_path, print_status
 
 logger = get_logger("Agents.CyberAutoAgent")
 
@@ -177,8 +184,9 @@ class ResilientMCPToolAdapter(AgentTool):
             return True
         return False
 
-def list_mcp_tools_wrapper(mcp_tools: List[AgentTool]):
-    mcp_full_catalog = f"""
+
+def mcp_tool_catalog(mcp_tools: List[AgentTool]) -> str:
+    mcp_full_catalog = """
 ## MCP FULL TOOL CATALOG
 
 """
@@ -186,6 +194,7 @@ def list_mcp_tools_wrapper(mcp_tools: List[AgentTool]):
         mcp_full_catalog += f"""
 ----
 name: {mcp_tool.tool_name}
+python-like function signature: {mcp_tools_input_schema_to_function_call(mcp_tool.tool_spec.get('inputSchema'), mcp_tool.tool_name)}
 
 input schema:
 {json.dumps(mcp_tool.tool_spec.get("inputSchema"))}
@@ -203,20 +212,12 @@ output schema:
 {mcp_tool.tool_spec.get("description")}
 ----
 """
-
-    @tool
-    def list_mcp_tools() -> str:
-        """
-        List the full catalog of MCP tools.
-        """
-        return mcp_full_catalog
-
-    return list_mcp_tools
+    return mcp_full_catalog
 
 
 def _snake_case(name: str) -> str:
     """Convert a string to a Pythonic snake_case identifier."""
-    s = re.sub(r"[\s\-\.]+", "_", name)
+    s = re.sub(r"[\s\-.]+", "_", name)
     s = re.sub(r"[^\w_]", "", s)
     s = re.sub(r"__+", "_", s)
     s = s.strip("_").lower()
@@ -508,3 +509,138 @@ def with_result_file(tool: AgentTool, output_base_path: Path) -> AgentTool:
     are persisted via FileWritingToolGenerator.
     """
     return FileWritingAgentToolAdapter(tool, output_base_path)
+
+
+def discover_mcp_tools(config: AgentConfig, server_config: ServerConfig) -> List[AgentTool]:
+    """Discover and register MCP tools from configured connections."""
+    tool_discovery_event = {
+        "type": "tool_discovery_start",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Starting MCP tool discovery",
+    }
+    print(f"__CYBER_EVENT__{json.dumps(tool_discovery_event)}__CYBER_EVENT_END__")
+
+    mcp_tools = []
+    environ = os.environ.copy()
+    for mcp_conn in (config.mcp_connections or []):
+        if '*' in mcp_conn.plugins or config.module in mcp_conn.plugins:
+            logger.debug("Discover MCP tools from: %s", mcp_conn)
+            try:
+                headers = resolve_env_vars_in_dict(mcp_conn.headers, environ)
+                match mcp_conn.transport:
+                    case "stdio":
+                        if not mcp_conn.command:
+                            raise ValueError(f"{mcp_conn.transport} requires command")
+                        command_list: List[str] = resolve_env_vars_in_list(mcp_conn.command, environ)
+                        transport = lambda: stdio_client(StdioServerParameters(
+                            command=command_list[0], args=command_list[1:],
+                            env=environ,
+                        ))
+                        tool_path = mcp_conn.command
+                    case "streamable-http":
+                        transport = lambda: streamablehttp_client(
+                            url=mcp_conn.server_url,
+                            headers=headers,
+                            timeout=mcp_conn.timeoutSeconds if mcp_conn.timeoutSeconds else 30,
+                        )
+                        tool_path = mcp_conn.server_url
+                    case "sse":
+                        transport = lambda: sse_client(
+                            url=mcp_conn.server_url,
+                            headers=headers,
+                            timeout=mcp_conn.timeoutSeconds if mcp_conn.timeoutSeconds else 30,
+                        )
+                        tool_path = mcp_conn.server_url
+                    case _:
+                        raise ValueError(f"Unsupported MCP transport {mcp_conn.transport}")
+                client = MCPClient(transport, prefix=mcp_conn.id)
+                prefix_idx = len(mcp_conn.id) + 1
+                cleanup_fn: Callable[[], None] | None = None
+                cleanup_fn = start_managed_mcp_client(client)
+                client_used = False
+                page_token = None
+                missing_tools = mcp_conn.allowed_tools.copy()
+                if "*" in missing_tools:
+                    missing_tools.remove("*")
+                while len(tools := client.list_tools_sync(page_token)) > 0:
+                    page_token = tools.pagination_token
+                    for tool in tools:
+                        logger.debug(f"Considering tool: {tool.tool_name}")
+                        tool_name_base = tool.tool_name[prefix_idx:]
+                        if '*' in mcp_conn.allowed_tools or tool_name_base in mcp_conn.allowed_tools:
+                            logger.debug(f"Allowed tool: {tool.tool_name}")
+                            try:
+                                missing_tools.remove(tool_name_base)
+                            except ValueError:
+                                pass
+
+                            # Wrap output and save into output path
+                            output_base_path = get_output_path(
+                                sanitize_target_name(config.target),
+                                config.op_id,
+                                sanitize_target_name(tool.tool_name),
+                                server_config.output.base_dir,
+                            )
+                            tool = with_result_file(tool, Path(output_base_path))
+                            tool = ResilientMCPToolAdapter(tool, client)
+                            mcp_tools.append(tool)
+                            client_used = True
+
+                            tool_desc = re.sub(r"\s+", " ",
+                                               tool.tool_spec.get('description').replace(r"\n", " ").replace(r"\r",
+                                                                                                             " ")).strip()[
+                                :256]
+                            print_status(f"✓ {tool.tool_name:<12} - {tool_path}", "SUCCESS")
+                            tool_event = {
+                                "type": "tool_available",
+                                "timestamp": datetime.now().isoformat(),
+                                "tool_name": tool.tool_name,
+                                "description": tool_desc,
+                                "status": "available",
+                                "binary": None,
+                                "path": tool_path,
+                            }
+                            print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
+                    if not page_token:
+                        break
+
+                def client_stop(*_):
+                    if cleanup_fn:
+                        cleanup_fn()
+                    else:
+                        client.stop(exc_type=None, exc_val=None, exc_tb=None)
+
+                if client_used:
+                    atexit.register(client_stop)
+                    signal.signal(signal.SIGTERM, client_stop)
+                else:
+                    client_stop()
+
+                for missing_tool in missing_tools:
+                    tool_name = mcp_conn.id + "_" + missing_tool
+                    print_status(f"○ {tool_name:<12} - {tool_path} (not available)", "WARNING")
+                    tool_event = {
+                        "type": "tool_unavailable",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool_name": tool_name,
+                        "description": None,
+                        "status": "unavailable",
+                        "binary": None,
+                        "path": None,
+                    }
+                    print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
+
+            except Exception as e:
+                logger.error(f"Communicating with MCP: {repr(mcp_conn)}", exc_info=e)
+                raise e
+
+    env_ready_event = {
+        "type": "environment_ready",
+        "timestamp": datetime.now().isoformat(),
+        "available_tools": list(map(lambda t: t.tool_name, mcp_tools)),
+        "tool_count": len(mcp_tools),
+        "message": f"Environment ready with {len(mcp_tools)} MCP tools",
+    }
+    print(f"__CYBER_EVENT__{json.dumps(env_ready_event)}__CYBER_EVENT_END__")
+
+    return mcp_tools

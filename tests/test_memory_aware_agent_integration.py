@@ -357,7 +357,8 @@ class TestMemoryAwareAgentIntegration:
         assert "## MEMORY CONTEXT" in system_prompt
         assert "Continuing assessment with 1 existing memories" in system_prompt
         assert "Load all memories with mem0_memory" in system_prompt
-        assert 'model_provider: "ollama"' in system_prompt
+        assert "Retrieve the active plan with mem0_memory" in system_prompt
+        assert "create one via mem0_memory" in system_prompt
 
 
 if __name__ == "__main__":

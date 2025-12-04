@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Agent creation and management for Cyber-AutoAgent."""
 
-import atexit
 import json
 import logging
 import os
-import signal
+import re
 import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple
 
 from strands import Agent
+from strands import tool
 from strands.types.tools import AgentTool
 from strands.tools.executors import ConcurrentToolExecutor
 from strands_tools.editor import editor
@@ -21,9 +21,6 @@ from strands_tools.python_repl import python_repl
 from strands_tools.shell import shell
 from strands_tools.stop import stop
 from strands_tools.swarm import swarm
-from mcp import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamablehttp_client
-from mcp.client.sse import sse_client
 
 from modules import prompts
 from modules.config import (
@@ -59,13 +56,8 @@ from modules.handlers.utils import print_status, sanitize_target_name, get_outpu
 from strands.tools.mcp.mcp_client import MCPClient
 
 from modules.tools.mcp import (
-    ResilientMCPToolAdapter,
-    list_mcp_tools_wrapper,
+    discover_mcp_tools,
     mcp_tools_input_schema_to_function_call,
-    resolve_env_vars_in_dict,
-    resolve_env_vars_in_list,
-    start_managed_mcp_client,
-    with_result_file,
 )
 from modules.tools.memory import (
     get_memory_client,
@@ -91,82 +83,18 @@ logger = get_logger("Agents.CyberAutoAgent")
 # Backward compatibility: expose get_system_prompt from modules.prompts for legacy imports/tests
 get_system_prompt = prompts.get_system_prompt
 
-# Model creation logic has been extracted to modules.config.models.factory
-# for better separation of concerns. See imports above for available functions.
 
+def tool_catalog_wrapper(full_tools_context: str, mcp_tools: List[AgentTool]):
+    @tool(name="tool_catalog")
+    def tool_catalog() -> str:
+        """
+        List the full catalog of available tools.
+        """
+        if mcp_tools:
+            return full_tools_context + "\n\n" + mcp_tool_catalog(mcp_tools)
+        return full_tools_context
 
-def _discover_mcp_tools(config: AgentConfig, server_config: ServerConfig) -> List[AgentTool]:
-    """Discover and register MCP tools from configured connections."""
-    mcp_tools = []
-    environ = os.environ.copy()
-    for mcp_conn in (config.mcp_connections or []):
-        if '*' in mcp_conn.plugins or config.module in mcp_conn.plugins:
-            logger.debug("Discover MCP tools from: %s", mcp_conn)
-            try:
-                headers = resolve_env_vars_in_dict(mcp_conn.headers, environ)
-                match mcp_conn.transport:
-                    case "stdio":
-                        if not mcp_conn.command:
-                            raise ValueError(f"{mcp_conn.transport} requires command")
-                        command_list: List[str] = resolve_env_vars_in_list(mcp_conn.command, environ)
-                        transport = lambda: stdio_client(StdioServerParameters(
-                            command = command_list[0], args=command_list[1:],
-                            env=environ,
-                        ))
-                    case "streamable-http":
-                        transport = lambda: streamablehttp_client(
-                            url=mcp_conn.server_url,
-                            headers=headers,
-                            timeout=mcp_conn.timeoutSeconds if mcp_conn.timeoutSeconds else 30,
-                        )
-                    case "sse":
-                        transport = lambda: sse_client(
-                            url=mcp_conn.server_url,
-                            headers=headers,
-                            timeout=mcp_conn.timeoutSeconds if mcp_conn.timeoutSeconds else 30,
-                        )
-                    case _:
-                        raise ValueError(f"Unsupported MCP transport {mcp_conn.transport}")
-                client = MCPClient(transport, prefix=mcp_conn.id)
-                prefix_idx = len(mcp_conn.id) + 1
-                cleanup_fn: Callable[[], None] | None = None
-                cleanup_fn = start_managed_mcp_client(client)
-                client_used = False
-                page_token = None
-                while len(tools := client.list_tools_sync(page_token)) > 0:
-                    page_token = tools.pagination_token
-                    for tool in tools:
-                        logger.debug(f"Considering tool: {tool.tool_name}")
-                        if '*' in mcp_conn.allowed_tools or tool.tool_name[prefix_idx:] in mcp_conn.allowed_tools:
-                            logger.debug(f"Allowed tool: {tool.tool_name}")
-                            # Wrap output and save into output path
-                            output_base_path = get_output_path(
-                                sanitize_target_name(config.target),
-                                config.op_id,
-                                sanitize_target_name(tool.tool_name),
-                                server_config.output.base_dir,
-                            )
-                            tool = with_result_file(tool, Path(output_base_path))
-                            tool = ResilientMCPToolAdapter(tool, client)
-                            mcp_tools.append(tool)
-                            client_used = True
-                    if not page_token:
-                        break
-                def client_stop(*_):
-                    if cleanup_fn:
-                        cleanup_fn()
-                    else:
-                        client.stop(exc_type=None, exc_val=None, exc_tb=None)
-                if client_used:
-                    atexit.register(client_stop)
-                    signal.signal(signal.SIGTERM, client_stop)
-                else:
-                    client_stop()
-            except Exception as e:
-                logger.error(f"Communicating with MCP: {repr(mcp_conn)}", exc_info=e)
-                raise e
-
-    return mcp_tools
+    return tool_catalog
 
 
 def create_agent(
@@ -318,6 +246,8 @@ def create_agent(
                 "Could not get memory overview for system prompt: %s", str(e)
             )
 
+    tool_count = 0
+
     # Load module-specific tools and prepare for injection
     module_tools_context = ""
     loaded_module_tools = []
@@ -410,8 +340,9 @@ def create_agent(
                             f"# load_tool path resolution failed for {tool_name}"
                         )
 
+            tool_count += len(tool_names)
             module_tools_context = f"""
-## MODULE-SPECIFIC TOOLS
+### MODULE-SPECIFIC TOOLS
 
 Available {config.module} module tools:
 {", ".join(tool_names)}
@@ -428,23 +359,22 @@ Available {config.module} module tools:
 
     tools_context = ""
     if config.available_tools:
+        tool_count += len(config.available_tools)
         tools_context = f"""
-## ENVIRONMENTAL CONTEXT
+### COMMAND LINE TOOLS
 
-Cyber Tools available in this environment:
+Command line tools available using the **shell** tool:
 {", ".join(config.available_tools)}
-
-Guidance and tool names in prompts are illustrative, not prescriptive. Always check availability and prefer tools present in this list. If a capability is missing, follow Ask-Enable-Retry for minimal, non-interactive enablement, or choose an equivalent available tool.
 """
 
     # Load MCP tools and prepare for injection
-    mcp_tools = _discover_mcp_tools(config, server_config)
+    mcp_tools = discover_mcp_tools(config, server_config)
     if mcp_tools:
+        tool_count += len(mcp_tools)
         mcp_tools_context = f"""
-## MCP TOOLS
+### MCP TOOLS
 
 Available {config.module} MCP tools:
-- list_mcp_tools()  # full MCP tool catalog including input schema, output schema, description
 {chr(10).join(f"- {mcp_tools_input_schema_to_function_call(mcp_tool.tool_spec.get('inputSchema'), mcp_tool.tool_name)}" for mcp_tool in mcp_tools)}
 """
     else:
@@ -453,13 +383,19 @@ Available {config.module} MCP tools:
     # Combine environmental and module tools context
     # Prefer to include both environment-detected tools and module-specific tools
     full_tools_context = ""
-    if tools_context:
-        full_tools_context += str(tools_context)
-    for tools_ctx in [module_tools_context, mcp_tools_context]:
+    for tools_ctx in [tools_context, module_tools_context, mcp_tools_context]:
         if tools_ctx:
             if full_tools_context:
                 full_tools_context += "\n\n"
             full_tools_context += str(tools_ctx)
+    if full_tools_context:
+        full_tools_context = f"""
+## TOOLS
+
+Guidance and tool names in prompts are illustrative, not prescriptive. Always check availability and prefer tools present in the following lists. If a capability is missing, follow Ask-Enable-Retry for minimal, non-interactive enablement, or choose an equivalent available tool.
+
+""" + full_tools_context
+
 
     # Load module-specific execution prompt
     module_execution_prompt = None
@@ -702,9 +638,7 @@ Available {config.module} MCP tools:
             "provider": config.provider,
             "model": config.model_id,
             "region": config.region_name,
-            "tools_available": len(config.available_tools)
-            if config.available_tools
-            else 0,
+            "tools_available": tool_count,
             "memory": {
                 "mode": config.memory_mode,
                 "path": config.memory_path or None,
@@ -868,22 +802,13 @@ Available {config.module} MCP tools:
 
     # Inject MCP tools if available
     if "mcp_tools" in locals() and mcp_tools:
-        tools_list.append(list_mcp_tools_wrapper(mcp_tools))
         tools_list.extend(mcp_tools)
-        agent_logger.info("Injected %d MCP tools into agent", len(mcp_tools))
-        for mcp_tool in mcp_tools:
-            tool_desc = " ".join(map(lambda s: s.strip(), mcp_tool.tool_spec.get('description')[:128].splitlines())).strip()
-            # Emit structured event for React UI
-            tool_event = {
-                "type": "tool_available",
-                "timestamp": datetime.now().isoformat(),
-                "tool_name": mcp_tool.tool_name,
-                "description": tool_desc,
-                "status": "available",
-                "binary": "MCP",
-                "path": "MCP",
-            }
-            print(f"__CYBER_EVENT__{json.dumps(tool_event)}__CYBER_EVENT_END__")
+        agent_logger.info(
+            "Injected %d MCP tools into agent", len(mcp_tools)
+        )
+        tools_list.append(tool_catalog_wrapper(full_tools_context, mcp_tools or []))
+    else:
+        tools_list.append(tool_catalog_wrapper(full_tools_context, []))
 
     agent_logger.debug("Creating autonomous agent")
 
@@ -923,6 +848,13 @@ Available {config.module} MCP tools:
 
     # Initialize concurrent tool executor for parallel execution
     tool_executor = ConcurrentToolExecutor()
+
+    trace_attributes_tool_names = []
+    for tool in tools_list:
+        try:
+            trace_attributes_tool_names.append(tool.tool_name)
+        except AttributeError:
+            trace_attributes_tool_names.append(tool.__name__)
 
     agent_kwargs = {
         "model": model,
@@ -976,24 +908,8 @@ Available {config.module} MCP tools:
             else "local",
             "gen_ai.request.model": config.model_id,
             # Tool configuration
-            "tools.available": len(tools_list),
-            "tools.names": [
-                "swarm",
-                "shell",
-                "editor",
-                "load_tool",
-                "mem0_memory",
-                "stop",
-                "http_request",
-                "python_repl",
-                "browser_set_headers",
-                "browser_goto_url",
-                "browser_get_page_html",
-                "browser_perform_action",
-                "browser_observe_page",
-                "browser_evaluate_js",
-                "browser_get_cookies",
-            ],
+            "tools.available": len(trace_attributes_tool_names),
+            "tools.names": trace_attributes_tool_names,
             "tools.parallel_limit": 8,
             # Memory configuration
             "memory.enabled": True,
