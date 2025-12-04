@@ -46,20 +46,6 @@ RUN set -eux; \
     fi;
 
 RUN set -eux; \
-    mirrors="ftp.acc.umu.se/mirror/kali.org/kali mirror.math.princeton.edu/pub/kali kali.mirror.garr.it/mirrors/kali mirror.pit.teraswitch.com/kali"; \
-    success=0; \
-    for mirror in $mirrors; do \
-        echo "deb http://$mirror kali-rolling main contrib non-free non-free-firmware" > /etc/apt/sources.list; \
-        if apt update; then \
-            echo "Using Kali mirror: $mirror"; \
-            success=1; \
-            break; \
-        fi; \
-    done; \
-    if [ "$success" -ne 1 ]; then \
-        echo "ERROR: apt update failed for all configured mirrors" >&2; \
-        exit 1; \
-    fi; \
     apt install -y --no-install-recommends \
     python3 \
     python3-venv \
@@ -80,6 +66,7 @@ RUN set -eux; \
     perl \
     gnupg2 \
     wget \
+    cookiecutter \
     # Perl SSL/TLS modules for Nikto HTTPS support
     libnet-ssleay-perl \
     libio-socket-ssl-perl \
@@ -94,6 +81,7 @@ RUN set -eux; \
     traceroute \
     # Additional essential tools
     jq \
+    yq \
     unzip \
     unrar \
     tree \
@@ -126,6 +114,7 @@ RUN set -eux; \
     # SMB/NetBIOS
     smbclient \
     smbmap \
+    netexec \
     nbtscan \
     python3-impacket \
     # SNMP/Discovery
@@ -255,7 +244,7 @@ RUN mkdir -p /opt/ysoserial && \
     wget -qO /opt/ysoserial/ysoserial.jar https://github.com/frohoff/ysoserial/releases/latest/download/ysoserial-all.jar || true
 
 # Install Python packages for our new tools (use --break-system-packages for Kali)
-RUN pip3 install --break-system-packages requests aiohttp jinja2 'httpx[cli]' ratelimit pycryptodomex ropgadget ropper
+RUN pip3 install --break-system-packages requests aiohttp jinja2 'httpx[cli]' ratelimit pycryptodomex
 
 # Create wrapper scripts for easy access
 RUN ([ -d /opt/clairvoyance ] && echo '#!/bin/bash\ncd /opt/clairvoyance && source venv/bin/activate && python -m clairvoyance "$@"' > /usr/local/bin/clairvoyance && chmod +x /usr/local/bin/clairvoyance) || true && \
@@ -264,12 +253,6 @@ RUN ([ -d /opt/clairvoyance ] && echo '#!/bin/bash\ncd /opt/clairvoyance && sour
     ([ -f /opt/gopherus/gopherus.py ] && echo '#!/bin/bash\npython3 /opt/gopherus/gopherus.py "$@"' > /usr/local/bin/gopherus && chmod +x /usr/local/bin/gopherus) || true && \
     ([ -f /opt/phpggc/phpggc ] && ln -sf /opt/phpggc/phpggc /usr/local/bin/phpggc) || true && \
     (echo '#!/bin/bash\njava -jar /opt/ysoserial/ysoserial.jar "$@"' > /usr/local/bin/ysoserial && chmod +x /usr/local/bin/ysoserial) || true
-
-# Install NetExec (modern CrackMapExec) from source
-RUN git clone --depth=1 https://github.com/Pennyw0rth/NetExec.git /opt/netexec && \
-    cd /opt/netexec && \
-    pip3 install --break-system-packages . && \
-    ln -sf /opt/netexec/nxc.py /usr/local/bin/netexec || true
 
 # Install Evil-WinRM via gem
 RUN gem install evil-winrm
@@ -286,17 +269,20 @@ RUN mkdir -p /opt/peass && \
     chmod +x /opt/peass/linpeas.sh && \
     ln -sf /opt/peass/linpeas.sh /usr/local/bin/linpeas
 
-# Install Sliver (C2 Framework - Client only) - Optional, may fail on ARM64
-RUN curl https://sliver.sh/install | bash || true
-
 # Install BloodHound Python (AD Analysis)
-RUN pipx install bloodhound
+RUN pipx install --global bloodhound
 
 # Install Certipy (AD CS Abuse)
-RUN pipx install certipy-ad
+RUN pipx install --global certipy-ad
 
 # Install Coercer (AD Coercion)
-RUN pipx install coercer
+RUN pipx install --global coercer
+
+RUN pipx install --global ropgadget
+
+RUN pipx install --global ropper
+
+RUN npm install --global @graphql-inspector/cli
 
 # Install Responder (LLMNR/NBT-NS Poisoning)
 RUN git clone --depth=1 https://github.com/lgandx/Responder.git /opt/responder && \
@@ -312,16 +298,16 @@ RUN git clone --depth=1 https://github.com/internetwache/GitTools.git /opt/gitto
     ln -sf /opt/gittools/Extractor/extractor.sh /usr/local/bin/gitextractor
 
 # Install PwnCat-CS (Advanced Reverse Shell Handler)
-RUN pipx install pwncat-cs
+RUN pipx install --global pwncat-cs
 
-# Install RsaCtfTool (RSA Attacks) - requires GMP/MPFR libraries
-RUN apt update && apt install -y --no-install-recommends \
-    libgmp-dev libmpfr-dev libmpc-dev && \
-    apt clean && rm -rf /var/lib/apt/lists/* && \
-    git clone --depth=1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/rsactftool && \
-    cd /opt/rsactftool && \
-    pip3 install --break-system-packages -r requirements.txt && \
-    ln -sf /opt/rsactftool/RsaCtfTool.py /usr/local/bin/rsactftool || true
+# Install RsaCtfTool (RSA Attacks) - requires GMP/MPFR libraries, python 3.9
+#RUN apt update && apt install -y --no-install-recommends \
+#    libgmp-dev libmpfr-dev libmpc-dev && \
+#    apt clean && rm -rf /var/lib/apt/lists/* && \
+#    git clone --depth=1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/rsactftool && \
+#    cd /opt/rsactftool && \
+#    pip3 install --break-system-packages -r requirements.txt && \
+#    ln -sf /opt/rsactftool/RsaCtfTool.py /usr/local/bin/rsactftool || true
 
 # Install Volatility3 (Memory Forensics) - Optional
 RUN git clone --depth=1 --depth=1 https://github.com/volatilityfoundation/volatility3.git /opt/volatility3 && \
@@ -336,6 +322,14 @@ RUN useradd --create-home --shell /bin/bash cyberagent && \
     chmod 755 /app/evidence /app/logs && \
     chown -R cyberagent:cyberagent /home/cyberagent/go
 
+# Install Sliver (C2 Framework - Client only) - Optional, may fail on ARM64
+RUN mkdir -p /home/cyberagent/sliver && \
+    cd /home/cyberagent/sliver && \
+    apt update && \
+    ( curl --silent https://sliver.sh/install | bash || true ) && \
+    chown -R cyberagent:cyberagent /home/cyberagent/sliver && \
+    apt clean && rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 
@@ -343,6 +337,8 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY uv.lock* ./
 COPY src/ ./src/
+COPY docker/tools_check.sh /tmp
+RUN bash /tmp/tools_check.sh
 
 # Install Python dependencies into a local venv
 RUN uv sync --no-dev
