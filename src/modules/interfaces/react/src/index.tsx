@@ -278,9 +278,9 @@ const runAutoAssessment = async () => {
       // Merge in priority order: defaults → saved config → CLI overrides
       const finalConfig = { ...defaultConfig, ...savedConfig, ...configOverrides } as Config;
 
-      loggingService.info(`⚙️  Config: ${finalConfig.iterations} iterations, ${finalConfig.modelProvider}/${finalConfig.modelId}`);
+      loggingService.info(`⚙️ Config: ${finalConfig.iterations} iterations, ${finalConfig.modelProvider}/${finalConfig.modelId}`);
       loggingService.info(`🔭 Observability: ${finalConfig.observability ? 'enabled' : 'disabled'}`);
-      loggingService.info(`🏗️  Deployment Mode: ${finalConfig.deploymentMode || 'local-cli'}`);
+      loggingService.info(`🏗️ Deployment Mode: ${finalConfig.deploymentMode || 'local-cli'}`);
 
       // Import and use ExecutionServiceFactory to select proper service
       const { ExecutionServiceFactory } = await import('./services/ExecutionServiceFactory.js');
