@@ -134,19 +134,13 @@ def _get_env_float(name: str, default: float) -> float:
 
 
 # Named constants for prompt budget configuration
-# CYBER_CONTEXT_LIMIT is the preferred name; CYBER_PROMPT_FALLBACK_TOKENS is legacy (deprecated)
+# CYBER_CONTEXT_LIMIT is the preferred name
 def _get_context_limit() -> int:
     """Get context limit, preferring new name over legacy."""
     new_val = os.getenv("CYBER_CONTEXT_LIMIT")
     if new_val:
         try:
             return int(new_val)
-        except ValueError:
-            pass
-    legacy_val = os.getenv("CYBER_PROMPT_FALLBACK_TOKENS")
-    if legacy_val:
-        try:
-            return int(legacy_val)
         except ValueError:
             pass
     return 200000  # Default

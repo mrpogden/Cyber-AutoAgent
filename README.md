@@ -56,12 +56,12 @@
 
 **THIS TOOL IS FOR EDUCATIONAL AND AUTHORIZED SECURITY TESTING PURPOSES ONLY.**
 
-| Requirement | Description |
-|-------------|-------------|
-| Authorization | Use only on systems you own or have explicit written permission to test |
-| Legal Compliance | Ensure compliance with all applicable laws and regulations |
-| Sandboxed Environment | Deploy in safe, sandboxed environments isolated from production systems |
-| Responsibility | Never use on unauthorized systems or networks - users are fully responsible for legal and ethical use |
+| Requirement           | Description                                                                                           |
+|-----------------------|-------------------------------------------------------------------------------------------------------|
+| Authorization         | Use only on systems you own or have explicit written permission to test                               |
+| Legal Compliance      | Ensure compliance with all applicable laws and regulations                                            |
+| Sandboxed Environment | Deploy in safe, sandboxed environments isolated from production systems                               |
+| Responsibility        | Never use on unauthorized systems or networks - users are fully responsible for legal and ethical use |
 
 ## Quick Start
 
@@ -395,13 +395,13 @@ Cyber-AutoAgent supports multiple model providers for maximum flexibility:
 
 ### Comparison
 
-| Feature | Bedrock | Ollama | LiteLLM |
-|---------|---------|--------|----------|
-| Cost | Pay per call | Free | Varies by provider |
-| Performance | High | Hardware dependent | Provider dependent |
-| Offline Use | No | Yes | No |
-| Setup | Easy | Higher | Medium |
-| Model Selection | 100+ models | Limited | 100+ models |
+| Feature         | Bedrock      | Ollama             | LiteLLM            |
+|-----------------|--------------|--------------------|--------------------|
+| Cost            | Pay per call | Free               | Varies by provider |
+| Performance     | High         | Hardware dependent | Provider dependent |
+| Offline Use     | No           | Yes                | No                 |
+| Setup           | Easy         | Higher             | Medium             |
+| Model Selection | 100+ models  | Limited            | 100+ models        |
 
 ## Observability & Evaluation
 
@@ -445,12 +445,12 @@ export ENABLE_AUTO_EVALUATION=true
 
 **Essential Environment Variables**:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENABLE_OBSERVABILITY` | `true` | Enable/disable Langfuse tracing |
-| `ENABLE_AUTO_EVALUATION` | `false` | Enable automatic Ragas evaluation |
-| `LANGFUSE_HOST` | `http://langfuse-web:3000` | Langfuse server URL |
-| `CYBER_AGENT_EVALUATION_MODEL` | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Model for evaluation |
+| Variable                       | Default                                        | Description                       |
+|--------------------------------|------------------------------------------------|-----------------------------------|
+| `ENABLE_OBSERVABILITY`         | `true`                                         | Enable/disable Langfuse tracing   |
+| `ENABLE_AUTO_EVALUATION`       | `false`                                        | Enable automatic Ragas evaluation |
+| `LANGFUSE_HOST`                | `http://langfuse-web:3000`                     | Langfuse server URL               |
+| `CYBER_AGENT_EVALUATION_MODEL` | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Model for evaluation              |
 
 ### Evaluation Metrics
 
@@ -615,14 +615,15 @@ python src/cyberautoagent.py \
 ### Data Storage
 
 **Unified Output Structure** (default, enabled by `CYBER_AGENT_ENABLE_UNIFIED_OUTPUT=true`):
-| Data Type | Location |
-|-----------|----------|
-| Evidence  | `./outputs/<target>/OP_<id>/` |
-| Logs      | `./outputs/<target>/OP_<id>/logs/` |
-| Reports   | `./outputs/<target>/OP_<id>/` |
-| Tools     | `./tools/` |
-| Utils     | `./outputs/<target>/OP_<id>/utils/` |
-| Memory    | `./outputs/<target>/memory/` |
+
+| Data Type  | Location                            |
+|------------|-------------------------------------|
+| Evidence   | `./outputs/<target>/OP_<id>/`       |
+| Logs       | `./outputs/<target>/OP_<id>/logs/`  |
+| Reports    | `./outputs/<target>/OP_<id>/`       |
+| Tools      | `./tools/`                          |
+| Utils      | `./outputs/<target>/OP_<id>/utils/` |
+| Memory     | `./outputs/<target>/memory/`        |
 
 The unified structure organizes all artifacts under operation-specific directories with unique IDs (`OP_YYYYMMDD_HHMMSS`), making it easy to track and manage results from multiple assessment runs. All directories are created automatically.
 
@@ -725,7 +726,7 @@ cp .env.example .env
 The `.env.example` file contains detailed configuration options with inline comments for all supported features including model providers, memory systems, and observability settings. Key environment variables include:
 
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, `AWS_REGION` for remote mode (AWS Bedrock)
-- `OLLAMA_HOST` for local mode (Ollama)
+- `OLLAMA_HOST`,`OLLAMA_API_BASE` for local mode (Ollama)
 - `CYBER_AGENT_OUTPUT_DIR`, `CYBER_AGENT_ENABLE_UNIFIED_OUTPUT` for output management
 - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` for observability
 - `MEM0_API_KEY` or `OPENSEARCH_HOST` for memory backends
@@ -808,20 +809,20 @@ cyber-autoagent/
 
 ### Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/cyberautoagent.py` | CLI entry point, observability setup |
-| `src/modules/agents/cyber_autoagent.py` | Strands agent creation, model configuration |
-| `src/modules/agents/report_agent.py` | Report generation agent |
-| `src/modules/config/manager.py` | Centralized configuration system |
-| `src/modules/tools/memory.py` | Unified Mem0 tool (FAISS/OpenSearch/Platform) |
-| `src/modules/evaluation/evaluation.py` | Ragas evaluation system |
-| `src/modules/prompts/system.py` | AI prompts and configurations |
-| `src/modules/prompts/manager.py` | Langfuse prompt management |
-| `.env.example` | Environment configuration template |
-| `docker/docker-compose.yml` | Complete observability stack |
-| `docker/Dockerfile` | Agent container build |
-| `docs/architecture.md` | Technical architecture deep dive |
+| File                                    | Purpose                                       |
+|-----------------------------------------|-----------------------------------------------|
+| `src/cyberautoagent.py`                 | CLI entry point, observability setup          |
+| `src/modules/agents/cyber_autoagent.py` | Strands agent creation, model configuration   |
+| `src/modules/agents/report_agent.py`    | Report generation agent                       |
+| `src/modules/config/manager.py`         | Centralized configuration system              |
+| `src/modules/tools/memory.py`           | Unified Mem0 tool (FAISS/OpenSearch/Platform) |
+| `src/modules/evaluation/evaluation.py`  | Ragas evaluation system                       |
+| `src/modules/prompts/system.py`         | AI prompts and configurations                 |
+| `src/modules/prompts/manager.py`        | Langfuse prompt management                    |
+| `.env.example`                          | Environment configuration template            |
+| `docker/docker-compose.yml`             | Complete observability stack                  |
+| `docker/Dockerfile`                     | Agent container build                         |
+| `docs/architecture.md`                  | Technical architecture deep dive              |
 
 ## Troubleshooting
 

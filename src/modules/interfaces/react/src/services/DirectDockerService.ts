@@ -317,6 +317,7 @@ export class DirectDockerService extends EventEmitter {
       // Ollama configuration
       if (config.ollamaHost) {
         env.push(`OLLAMA_HOST=${config.ollamaHost}`);
+        env.push(`OLLAMA_API_BASE=${config.ollamaHost}`);
       }
       if (config.ollamaTimeout) {
         env.push(`OLLAMA_TIMEOUT=${config.ollamaTimeout}`);

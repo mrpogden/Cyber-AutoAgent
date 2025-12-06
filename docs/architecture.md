@@ -285,12 +285,12 @@ Events flow from the Python agent through stdout using the `__CYBER_EVENT__` pro
 
 **Automated Performance Assessment** using Ragas metrics integrated with Langfuse:
 
-| Metric | Range | Purpose |
-|--------|-------|---------|
-| tool_selection_accuracy | 0.0-1.0 | Strategic tool choice and sequencing |
-| evidence_quality | 0.0-1.0 | Comprehensive vulnerability documentation |
-| methodology_adherence | 0.0-1.0 | Defensible methodology alignment |
-| penetration_test_quality | 0.0-1.0 | Holistic assessment quality |
+| Metric                   | Range   | Purpose                                   |
+|--------------------------|---------|-------------------------------------------|
+| tool_selection_accuracy  | 0.0-1.0 | Strategic tool choice and sequencing      |
+| evidence_quality         | 0.0-1.0 | Comprehensive vulnerability documentation |
+| methodology_adherence    | 0.0-1.0 | Defensible methodology alignment          |
+| penetration_test_quality | 0.0-1.0 | Holistic assessment quality               |
 
 Evaluation triggers automatically after operation completion when `ENABLE_AUTO_EVALUATION=true`, providing continuous feedback for system improvement.
 

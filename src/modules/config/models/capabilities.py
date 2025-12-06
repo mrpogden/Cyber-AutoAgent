@@ -35,11 +35,13 @@ try:
         LlmProviders,
         ProviderConfigManager,
         supports_reasoning as llm_supports_reasoning,
+        ModelInfoBase,
     )
 except Exception:  # pragma: no cover
     litellm = None  # type: ignore
     ProviderConfigManager = None  # type: ignore
     LlmProviders = None  # type: ignore
+    ModelInfoBase = None  # type: ignore
 
     def llm_supports_reasoning(
         model: str, custom_llm_provider: Optional[str] = None
@@ -136,7 +138,7 @@ class ModelCapabilitiesResolver:
         base_provider = provider
 
         if provider == "litellm":
-            pfx, _ = _split_prefix(model)
+            pfx, provider_model = _split_prefix(model)
             if pfx:
                 base_provider = pfx
 
@@ -188,12 +190,13 @@ class ModelCapabilitiesResolver:
             except Exception:
                 supports_reason = False
 
-        # Check provider params for reasoning_effort support
+        # Check provider params for reasoning_effort and tools support
         allowed_params: list[str] = []
         try:
             if (
                 ProviderConfigManager is not None
                 and LlmProviders is not None
+                and ModelInfoBase is not None
                 and base_provider
             ):
                 prov_enum = LlmProviders(base_provider)  # type: ignore[call-arg]
@@ -201,9 +204,14 @@ class ModelCapabilitiesResolver:
                     model=model, provider=prov_enum
                 )
                 if cfg is not None and hasattr(cfg, "get_supported_openai_params"):
-                    allowed_params = list(
+                    allowed_params.extend(
                         cfg.get_supported_openai_params(model=model) or []
                     )
+                if cfg is not None and hasattr(cfg, "get_model_info"):
+                    model_info_base: ModelInfoBase = cfg.get_model_info(model=model)
+                    if model_info_base is not None:
+                        if model_info_base.supports_function_calling:
+                            allowed_params.extend(["tools", "tool_choice"])
         except Exception as e:
             logger.debug(
                 "Provider config lookup failed for %s/%s: %s",
@@ -211,6 +219,25 @@ class ModelCapabilitiesResolver:
                 model,
                 e,
             )
+
+        # Check Ollama capabilities
+        if base_provider == "ollama":
+            api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+
+            try:
+                response = litellm.module_level_client.post(
+                    url=f"{api_base}/api/show",
+                    json={"name": model},
+                )
+                model_info = response.json()
+                model_capabilities = model_info.get("capabilities", {})
+                if "tools" in model_capabilities:
+                    allowed_params.extend(["tools", "tool_choice"])
+            except Exception as e:
+                logger.debug(
+                    f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable."
+                )
+
 
         lowered = {p.lower() for p in allowed_params}
         if ("thinking" in lowered) or ("reasoning_effort" in lowered):

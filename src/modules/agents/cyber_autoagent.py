@@ -4,23 +4,28 @@
 import json
 import logging
 import os
-import re
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from strands import Agent
 from strands import tool
 from strands.types.tools import AgentTool
 from strands.tools.executors import ConcurrentToolExecutor
+
+# These tools have the @tool decorator, the function is to be imported
 from strands_tools.editor import editor
-from strands_tools.http_request import http_request
 from strands_tools.load_tool import load_tool
-from strands_tools.python_repl import python_repl
 from strands_tools.shell import shell
-from strands_tools.stop import stop
 from strands_tools.swarm import swarm
+
+# These tools are modules, not functions, the following imports MUST import the module
+from strands_tools import (
+    http_request,
+    python_repl,
+    stop,
+)
 
 from modules import prompts
 from modules.config import (
@@ -681,6 +686,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
 
     # Tool router to prevent unknown-tool failures by routing to shell before execution
     # Allow configurable truncation of large tool outputs via env var
+    # TODO: make the default a ratio of the context size and/or input tokens
     try:
         max_result_chars = int(os.getenv("CYBER_TOOL_MAX_RESULT_CHARS", "30000"))
     except Exception:

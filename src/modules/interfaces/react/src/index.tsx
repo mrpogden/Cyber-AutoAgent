@@ -346,7 +346,7 @@ const runAutoAssessment = async () => {
 function renderReactApp() {
   // Check for non-interactive mode without autoRun or headless
   if (!isRawModeSupported && !cli.flags.headless && !cli.flags.autoRun) {
-    loggingService.info('⚠️  Running in non-interactive mode. Use --headless flag for scripting.');
+    loggingService.info('⚠️ Running in non-interactive mode. Use --headless flag for scripting.');
     loggingService.info('💡 For interactive mode, run directly in a terminal.');
     loggingService.info('\nUsage: cyber-react --target <target> --auto-run');
     process.exit(1);
