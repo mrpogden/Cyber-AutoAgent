@@ -179,7 +179,7 @@ All model parameters use consistent precedence across capabilities, limits, and 
 MAX_COMPLETION_TOKENS=50000          # Output token limit (UI uses this)
 
 # Terminal/advanced overrides
-CYBER_CONTEXT_WINDOW=300000          # Input token limit override
+CYBER_CONTEXT_LIMIT=300000          # Input token limit override
 MAX_TOKENS=50000                     # Output token limit (alternative)
 CYBER_REASONING_ALLOW="model-name"   # Force enable reasoning
 CYBER_REASONING_DENY="model-name"    # Force disable reasoning
