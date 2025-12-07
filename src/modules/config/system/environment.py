@@ -184,6 +184,7 @@ class TeeOutput:
         self.log = open(log_file, "a", encoding="utf-8", buffering=1)
         self.lock = threading.Lock()
         self.line_buffer = ""  # Buffer for incomplete lines
+        self._closed = False
 
     def write(self, message):
         with self.lock:
@@ -237,10 +238,14 @@ class TeeOutput:
 
     def close(self):
         with self.lock:
+            if self._closed:
+                return
+            self._closed = True
             try:
                 # Flush any remaining buffered content
                 if self.line_buffer:
                     self.log.write(self.line_buffer)
+                    self.line_buffer = ""
                     self.log.flush()
                 self.log.close()
             except (OSError, AttributeError):

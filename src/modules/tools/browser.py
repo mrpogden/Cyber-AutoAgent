@@ -894,7 +894,7 @@ async def browser_goto_url(url: str):
         - Observations of the current page state after the navigation.
         - If navigation fails due to timeouts/blocks, an HTTP fallback summary (headers and key files) is returned.
     """
-    logger.info("[BROWSER] entered goto url")
+    logger.info("[BROWSER] entered goto url %s", url)
     async with get_browser() as browser:
         reset_notice: Optional[str] = None
 
@@ -926,10 +926,12 @@ async def browser_goto_url(url: str):
                         ),
                         "accept-language": "en-US,en;q=0.9",
                     }
+                    logger.info("[BROWSER] getting response for %s", t)
                     async with browser.timeout():
                         resp = await browser.context.request.get(
                             t, timeout=15000, headers=req_headers
                         )
+                    logger.info("[BROWSER] got response for %s", t)
                     status = resp.status
                     # Playwright Python APIResponse exposes headers as a property/dict
                     try:
@@ -937,10 +939,12 @@ async def browser_goto_url(url: str):
                     except Exception:
                         headers = {}
                     # Always attempt to capture a body preview, even on error, for WAF pages
+                    logger.info("[BROWSER] getting response text for %s",t)
                     try:
                         text_body = await resp.text()
                     except Exception:
                         text_body = ""
+                    logger.info("[BROWSER] got response text for %s", t)
                     # Persist a compact artifact for each fetched resource
                     artifact_path = os.path.join(
                         browser.artifacts_dir,
@@ -1006,6 +1010,7 @@ async def browser_goto_url(url: str):
             )
             waf_note = " Detected Cloudflare/WAF indicators." if waf_detected else ""
             banner = f"[HTTP fallback executed] Reason: {reason}. Fetched {len(rows)} resource(s).{waf_note}"
+            logger.info("[BROWSER] _http_fallback: %s", banner)
             return "\n".join([banner, toon])
 
         async def _perform_navigation():
@@ -1033,6 +1038,7 @@ async def browser_goto_url(url: str):
                 payload = await _perform_navigation()
                 if reset_notice:
                     payload = f"{reset_notice}\n{payload}"
+                logger.info("[BROWSER] returning payload %s", payload)
                 return payload
             except TimeoutError:
                 # Navigation timed out: perform a light reset once, then fallback
@@ -1044,6 +1050,7 @@ async def browser_goto_url(url: str):
                     reset_notice = "[Browser reset applied] Navigation timeout; retrying after session reset."
                     continue
                 # Fallback to HTTP fetch
+                logger.info("[BROWSER] navigation timeout")
                 return await _http_fallback("navigation timeout")
             except Exception as exc:
                 message = str(exc)
@@ -1059,7 +1066,14 @@ async def browser_goto_url(url: str):
                     reset_notice = "[Browser reset applied] Execution context was destroyed; retry succeeded after session reset."
                     continue
                 # On non-retriable errors (e.g., WAF/blocked), use HTTP fallback to at least collect headers
+                logger.warning(
+                    "Browser navigation failed (%s); running fallback",
+                    message,
+                    exc_info=exc,
+                )
                 return await _http_fallback(message or "navigation error")
+        logger.info("[BROWSER] retry attempts exhausted")
+        return await _http_fallback("retry attempts exhausted")
 
 
 @tool
@@ -1072,6 +1086,7 @@ async def browser_get_page_html() -> str:
     Returns:
         The path of the downloaded HTML file artifact.
     """
+    logger.info("browser_get_page_html")
     async with get_browser() as browser:
         async with browser.timeout():
             page_html = await browser.page.content()
@@ -1080,6 +1095,7 @@ async def browser_get_page_html() -> str:
         )
         with open(html_artifact_file, "w", encoding="utf-8") as f:
             f.write(page_html)
+        logger.info("browser_get_page_html: %s", html_artifact_file)
         return f"HTML content saved to artifact: {html_artifact_file}"
 
 
@@ -1101,9 +1117,12 @@ async def browser_evaluate_js(expression: str):
     Returns:
         The result of the javascript expression.
     """
+    logger.info("browser_evaluate_js: %s", expression)
     async with get_browser() as browser:
         async with browser.timeout():
-            return await browser.page.evaluate(expression)
+            retval = await browser.page.evaluate(expression)
+            logger.info("browser_evaluate_js: %s = %s", expression, retval)
+            return retval
 
 
 @tool
@@ -1119,10 +1138,12 @@ async def browser_get_cookies():
              'httpOnly', 'secure', and 'sameSite'. If no cookies are found,
              a message string indicating this is returned.
     """
+    logger.info("browser_get_cookies")
     async with get_browser() as browser:
         async with browser.timeout():
             cookies = await browser.context.cookies()
         if len(cookies) == 0:
+            logger.info("browser_get_cookies: no cookies")
             return "No cookies found"
 
         csv_buffer = StringIO()
@@ -1143,6 +1164,7 @@ async def browser_get_cookies():
         for cookie in cookies:
             writer.writerow(dict(cookie))
 
+        logger.info("browser_get_cookies: %s", csv_buffer.getvalue())
         return csv_buffer.getvalue()
 
 
@@ -1170,6 +1192,7 @@ async def browser_perform_action(action: str):
         - Any Network requests, dialogs, console logs and downloads captured during the interaction.
         - Observations of the current page state after the interaction.
     """
+    logger.info("browser_perform_action: %s", action)
     async with get_browser() as browser:
         async with browser.interaction_context_capture(
             only_domains=[browser.page_domain]
@@ -1191,6 +1214,7 @@ async def browser_perform_action(action: str):
                     ),
                 )
             )
+        logger.info("browser_perform_action: %s done", action)
         return f"<observations>\n{observations}\n</observations>\n{interaction_context}"
 
 
@@ -1216,7 +1240,10 @@ async def browser_observe_page(instruction: Optional[str] = None) -> list[str]:
         List[str]: A list of descriptions derived from the observations recorded
             on the browser page.
     """
+    logger.info("browser_observe_page: %s", instruction)
     async with get_browser() as browser:
         async with browser.timeout():
             observations = await browser.page.observe(instruction)
-        return [observation.description for observation in observations]
+        retval = [observation.description for observation in observations]
+        logger.info("browser_observe_page: %s", retval)
+        return retval

@@ -452,7 +452,7 @@ src/modules/operation_plugins/<module>/
 # Prompt optimization control
 CYBER_PROMPT_REBUILD_INTERVAL=20           # Steps between automatic optimizations
 CYBER_ENABLE_PROMPT_OPTIMIZATION=true      # Enable/disable optimization
-CYBER_MEMORY_QUERY_LIMIT=30               # Number of recent memories to retrieve
+CYBER_MEMORY_QUERY_LIMIT=30                # Number of recent memories to retrieve
 
 # Operation root directory (set automatically)
 CYBER_OPERATION_ROOT=/path/to/outputs/<target>/OP_<id>

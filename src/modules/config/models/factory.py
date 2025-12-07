@@ -20,11 +20,15 @@ from modules.config.models.capabilities import (
     get_model_input_limit,
     get_provider_default_limit,
 )
-PROMPT_TOKEN_FALLBACK_LIMIT = 200000
 from modules.handlers.utils import print_status
 
 logger = get_logger("Config.ModelFactory")
 
+PROMPT_TOKEN_FALLBACK_LIMIT = 0
+try:
+    PROMPT_TOKEN_FALLBACK_LIMIT = int(os.getenv("CYBER_CONTEXT_LIMIT", "0"))
+except ValueError:
+    pass
 
 def _get_config_manager():
     """Lazy import to avoid circular dependency."""
