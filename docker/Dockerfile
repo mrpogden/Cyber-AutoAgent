@@ -346,7 +346,7 @@ RUN --mount=type=cache,target=/root/.cache \
 RUN --mount=type=cache,target=/root/.cache \
     env PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="debian13-$(dpkg --print-architecture | sed 's/amd/x/')" \
     PLAYWRIGHT_BROWSERS_PATH=/home/cyberagent/.cache/ms-playwright \
-    uv run --no-project --no-dev playwright install chromium --with-deps && \
+    uv run --no-project playwright install chromium --with-deps && \
     chown -R cyberagent:cyberagent /home/cyberagent/.cache && \
     CHROME_BIN=$(find /home/cyberagent/.cache/ms-playwright -type f \( -name chrome -o -name chromium \) | head -n 1) && \
     if [ -n "$CHROME_BIN" ]; then mkdir -p /usr/lib/chromium && ln -sf "$CHROME_BIN" /usr/lib/chromium/chromium; fi && \

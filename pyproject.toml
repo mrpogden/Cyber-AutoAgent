@@ -60,6 +60,7 @@ dependencies = [
     "r2pipe>=1.9.0",
     "sentence-transformers>=5.1.2",
     "standard-distutils>=3.11.9",
+    "guppy3~=3.1.5",
 ]
 
 [project.optional-dependencies]

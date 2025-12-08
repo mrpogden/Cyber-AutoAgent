@@ -186,7 +186,7 @@ def main() -> int:
     parser.add_argument("version", help="New version string, e.g. 0.1.6")
     args = parser.parse_args()
 
-    replace_underscore_version(args.version, ["src/__init__.py"])
+    replace_underscore_version(args.version, ["src/__init__.py", "src/modules/__init__.py"])
 
     replace_docker_image_version(args.version, ["docker/docker-compose.yml"])
 

@@ -86,6 +86,23 @@ def extract_domain(url_or_fqdn: str) -> str:
     return f"{domain_extract.domain}.{domain_extract.suffix}"
 
 
+class InteractionCollector:
+    def __init__(self, browser: "BrowserService"):
+        self.browser = browser
+        self.requests: list[Request] = []
+        self.downloads: list[str] = []
+        self.logs: list[dict[str, Any]] = []
+        self.dialogs: list[dict[str, Any]] = []
+
+    async def summarize(self) -> str:
+        return await self.browser.simplify_metadata_for_llm(
+            requests=self.requests,
+            downloads=self.downloads,
+            dialogs=self.dialogs,
+            logs=self.logs
+        )
+
+
 class BrowserService(EventEmitter):
     _initialized = False
 
@@ -461,9 +478,9 @@ class BrowserService(EventEmitter):
 
                 if cookie_header := all_request_headers.get("cookie"):
                     parsed_cookie = SimpleCookie(cookie_header)
-                    for cookie in parsed_cookie.items():  # type: tuple[str, Morsel]
+                    for name, value in parsed_cookie.items():  # type: tuple[str, Morsel]
                         har_entry["request"]["cookies"].append(
-                            {"name": cookie[0], "value": cookie[1].value}
+                            {"name": name, "value": value}
                         )
 
                 simplified_request = [
@@ -618,10 +635,8 @@ class BrowserService(EventEmitter):
             - On context entry, sets up event listeners to capture specified web  interactions.
             - On context exit, removes the event listeners to prevent further interception of events.
         """
-        requests: list[Request] = []
-        downloads: list[str] = []
-        logs: list[dict[str, Any]] = []
-        dialogs: list[dict[str, Any]] = []
+
+        collector = InteractionCollector(self)
 
         def capture_request(request_or_response: Request | Response):
             """
@@ -643,7 +658,7 @@ class BrowserService(EventEmitter):
                 if isinstance(request_or_response, Response)
                 else request_or_response
             )
-            if request.method == "OPTIONS" or request in requests:
+            if request.method == "OPTIONS" or request in collector.requests:
                 return
 
             request_url_hostname: Optional[str] = urlparse(request.url).hostname
@@ -653,10 +668,10 @@ class BrowserService(EventEmitter):
                         request_url_hostname is not None
                         and request_url_hostname.endswith(filter_domain)
                     ):
-                        requests.append(request)
+                        collector.requests.append(request)
                         return
             else:
-                requests.append(request)
+                collector.requests.append(request)
 
         async def capture_log(msg: ConsoleMessage):
             """
@@ -678,7 +693,7 @@ class BrowserService(EventEmitter):
             args: list[Any] = []
             for arg in msg.args:
                 args.append(await arg.json_value())
-            logs.append(
+            collector.logs.append(
                 {
                     "type": msg.type,
                     "args": args,
@@ -686,10 +701,10 @@ class BrowserService(EventEmitter):
             )
 
         def capture_download(file_path: str):
-            downloads.append(file_path)
+            collector.downloads.append(file_path)
 
         def capture_dialog(dialog: Dialog):
-            dialogs.append(
+            collector.dialogs.append(
                 {
                     "type": dialog.type,
                     "message": dialog.message,
@@ -705,9 +720,7 @@ class BrowserService(EventEmitter):
         self.on("download", capture_download)
         self.on("dialog", capture_dialog)
         try:
-            yield await self.simplify_metadata_for_llm(
-                requests, downloads, dialogs, logs
-            )
+            yield collector
         finally:
             self.off("request", capture_request)
             self.off("requestfinished", capture_request)
@@ -875,6 +888,7 @@ async def browser_set_headers(headers: Optional[dict[str, str]] = None):
         if not headers:
             return "No headers provided. Please call browser_set_headers with a non-empty map, e.g. {'user-agent': '...'}"
         await browser.context.set_extra_http_headers(headers)
+        log_heap_stats()
         return f"Applied {len(headers)} extra HTTP header(s) to the browser context"
 
 
@@ -1031,7 +1045,8 @@ async def browser_goto_url(url: str):
                         ),
                     )
                 )
-            return f"<observations>\n{observations}\n</observations>\n{interaction_context}"
+            summary = await interaction_context.summarize()
+            return f"<observations>\n{observations}\n</observations>\n{summary}"
 
         for attempt in range(2):
             try:
@@ -1039,6 +1054,7 @@ async def browser_goto_url(url: str):
                 if reset_notice:
                     payload = f"{reset_notice}\n{payload}"
                 logger.info("[BROWSER] returning payload %s", payload)
+                log_heap_stats()
                 return payload
             except TimeoutError:
                 # Navigation timed out: perform a light reset once, then fallback
@@ -1051,6 +1067,7 @@ async def browser_goto_url(url: str):
                     continue
                 # Fallback to HTTP fetch
                 logger.info("[BROWSER] navigation timeout")
+                log_heap_stats()
                 return await _http_fallback("navigation timeout")
             except Exception as exc:
                 message = str(exc)
@@ -1071,8 +1088,10 @@ async def browser_goto_url(url: str):
                     message,
                     exc_info=exc,
                 )
+                log_heap_stats()
                 return await _http_fallback(message or "navigation error")
         logger.info("[BROWSER] retry attempts exhausted")
+        log_heap_stats()
         return await _http_fallback("retry attempts exhausted")
 
 
@@ -1096,6 +1115,7 @@ async def browser_get_page_html() -> str:
         with open(html_artifact_file, "w", encoding="utf-8") as f:
             f.write(page_html)
         logger.info("browser_get_page_html: %s", html_artifact_file)
+        log_heap_stats()
         return f"HTML content saved to artifact: {html_artifact_file}"
 
 
@@ -1122,6 +1142,7 @@ async def browser_evaluate_js(expression: str):
         async with browser.timeout():
             retval = await browser.page.evaluate(expression)
             logger.info("browser_evaluate_js: %s = %s", expression, retval)
+            log_heap_stats()
             return retval
 
 
@@ -1165,6 +1186,7 @@ async def browser_get_cookies():
             writer.writerow(dict(cookie))
 
         logger.info("browser_get_cookies: %s", csv_buffer.getvalue())
+        log_heap_stats()
         return csv_buffer.getvalue()
 
 
@@ -1215,7 +1237,9 @@ async def browser_perform_action(action: str):
                 )
             )
         logger.info("browser_perform_action: %s done", action)
-        return f"<observations>\n{observations}\n</observations>\n{interaction_context}"
+        log_heap_stats()
+        summary = await interaction_context.summarize()
+        return f"<observations>\n{observations}\n</observations>\n{summary}"
 
 
 @tool
@@ -1245,5 +1269,15 @@ async def browser_observe_page(instruction: Optional[str] = None) -> list[str]:
         async with browser.timeout():
             observations = await browser.page.observe(instruction)
         retval = [observation.description for observation in observations]
+        log_heap_stats()
         logger.info("browser_observe_page: %s", retval)
         return retval
+
+
+def log_heap_stats():
+    try:
+        from guppy import hpy
+        h=hpy()
+        logger.info(h.heap()[0:12])
+    except ImportError:
+        logger.debug("Install guppy3 for heap analysis")
