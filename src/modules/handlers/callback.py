@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Main callback handler for cyber security assessment operations.
+Main callback handler for cybersecurity assessment operations.
 
 This module contains the ReasoningHandler class which orchestrates all
 callback operations, step tracking, and report generation.
 """
-
 import logging
 import os
 import sys
@@ -59,12 +58,10 @@ class ReasoningHandler(PrintingCallbackHandler):
         # Emit structured banner event instead of direct print
         emit_event(
             "banner",
-            {
-                "title": "Cyber Security Assessment",
-                "operation_id": self.state.operation_id,
-                "timestamp": timestamp,
-                "icon": "🔐",
-            },
+            "Cyber AutoAgent - Full Spectrum Cyber Operations",
+            operation_id=self.state.operation_id,
+            timestamp=timestamp,
+            icon="🔐",
         )
 
     def __call__(self, **kwargs):
