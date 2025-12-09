@@ -88,8 +88,6 @@ class ReactBridgeHandler(PrintingCallbackHandler):
         # Metrics emission handled by background thread
 
         # Tool tracking
-        self.last_tool_name = None
-        self.last_tool_id = None
         self.tool_start_times = {}  # Track start times for duration calculation
         self.announced_tools = set()
         self.tool_input_buffer = {}
@@ -780,8 +778,6 @@ class ReactBridgeHandler(PrintingCallbackHandler):
 
             # Track tool
             self.announced_tools.add(tool_id)
-            self.last_tool_name = tool_name
-            self.last_tool_id = tool_id
             self.tools_used.add(tool_name)
             # Increment per-tool usage count once per announced tool id
             try:
@@ -949,6 +945,9 @@ class ReactBridgeHandler(PrintingCallbackHandler):
             old_input = self.tool_input_buffer.get(tool_id, {})
             new_input = self._parse_tool_input_from_stream(raw_input)
 
+            # Lookup tool_name for this tool_id
+            tool_name = self.tool_name_buffer.get(tool_id, "")
+
             # Update buffer with latest input
             self.tool_input_buffer[tool_id] = new_input
 
@@ -993,7 +992,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     self.emit_ui_event(
                         {
                             "type": "tool_start",
-                            "tool_name": self.last_tool_name,
+                            "tool_name": tool_name,
                             "tool_id": tool_id,
                             "tool_input": new_input,
                             "swarm_agent": self.current_swarm_agent,
@@ -1006,7 +1005,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     self.emit_ui_event(
                         {
                             "type": "tool_invocation_start",
-                            "tool_name": self.last_tool_name,
+                            "tool_name": tool_name,
                             "swarm_agent": self.current_swarm_agent,
                         }
                     )
@@ -1016,7 +1015,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                 # For non-swarm handoff_to_agent, emit tool_start now that input is complete and skip tool_input_update
                 elif (
                     not self.in_swarm_operation
-                    and self.last_tool_name == "handoff_to_agent"
+                    and tool_name == "handoff_to_agent"
                     and tool_id in self.announced_tools
                     and tool_id not in self.tools_with_complete_input
                     and self._handoff_input_complete(new_input)
@@ -1024,7 +1023,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     self.emit_ui_event(
                         {
                             "type": "tool_start",
-                            "tool_name": self.last_tool_name,
+                            "tool_name": tool_name,
                             "tool_id": tool_id,
                             "tool_input": new_input,
                         }
@@ -1032,7 +1031,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     self.emit_ui_event(
                         {
                             "type": "tool_invocation_start",
-                            "tool_name": self.last_tool_name,
+                            "tool_name": tool_name,
                         }
                     )
                     self.tools_with_complete_input.add(tool_id)
@@ -1043,7 +1042,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                 try:
                     if tool_id:
                         # Skip tool_input_update for handoff_to_agent to avoid duplicated fields when UI merges events
-                        if self.last_tool_name != "handoff_to_agent":
+                        if tool_name != "handoff_to_agent":
                             self.emit_ui_event(
                                 {
                                     "type": "tool_input_update",
@@ -1055,22 +1054,20 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     pass
 
                 # Emit tool-specific events now that we have the real input (skip 'swarm')
-                if self._is_valid_input(new_input) and self.last_tool_name != "swarm":
-                    self.tool_emitter.emit_tool_specific_events(
-                        self.last_tool_name, new_input
-                    )
+                if self._is_valid_input(new_input) and tool_name != "swarm":
+                    self.tool_emitter.emit_tool_specific_events(tool_name, new_input)
 
                 # Handle swarm tracking with real input (single source of truth)
-                if self.last_tool_name == "swarm":
+                if tool_name == "swarm":
                     try:
-                        self._track_swarm_start(new_input, self.last_tool_id)
+                        self._track_swarm_start(new_input, tool_id)
                     except Exception as e:
                         logger.warning(
                             "SWARM_START streaming update parsing failed: %s; input=%s",
                             e,
                             raw_input,
                         )
-                        self._track_swarm_start(new_input, self.last_tool_id)
+                        self._track_swarm_start(new_input, tool_id)
                     except Exception as e:
                         logger.warning(
                             "SWARM_START streaming update parsing failed: %s; input=%s",
@@ -1153,8 +1150,15 @@ class ReactBridgeHandler(PrintingCallbackHandler):
             }
 
         # Extract tool_use_id and get correct tool name early for proper attribution
-        tool_use_id = tool_result_dict.get("toolUseId") or self.last_tool_id
-        tool_name = self.tool_name_buffer.get(tool_use_id, self.last_tool_name)
+        tool_use_id = tool_result_dict.get("toolUseId") or tool_result_dict.get("id")
+        if not tool_use_id:
+            # Drop tool results that cannot be safely attributed to a specific tool invocation
+            logger.warning(
+                "Dropping tool result without toolUseId/id: %s",
+                tool_result_dict,
+            )
+            return
+        tool_name = self.tool_name_buffer.get(tool_use_id) or tool_result_dict.get("name") or "unknown_tool"
 
         # Do not flush reasoning here; for swarm we want reasoning to follow tool output
 
@@ -1338,7 +1342,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
         # Defer tool_end emission until after output so reasoning can appear below output
         _deferred_tool_end = {
             "tool_name": tool_name,
-            "tool_id": tool_use_id or self.last_tool_id,
+            "tool_id": tool_use_id,
             "success": success,
         }
         if duration is not None:
@@ -1525,9 +1529,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                         and tool_use_id
                         in getattr(self, "_python_preview_emitted", set())
                     )
-                    code_input = self.tool_input_buffer.get(
-                        tool_use_id or self.last_tool_id, {}
-                    )
+                    code_input = self.tool_input_buffer.get(tool_use_id, {})
                     code_text = self._extract_code_from_input(code_input)
                     if code_text and code_text.strip():
                         code_event = {
@@ -1580,7 +1582,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
             return
 
         # Check if we already processed this exact output
-        output_key = f"{tool_use_id or self.last_tool_id}:{hash(output_text.strip())}"
+        output_key = f"{tool_use_id or ''}:{hash(output_text.strip())}"
         if (
             hasattr(self, "_processed_outputs")
             and output_key in self._processed_outputs
@@ -1634,7 +1636,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
             if (not self.in_swarm_operation) and bool(
                 getattr(self, "_reasoning_required_for_current_step", False)
             ):
-                fallback = f"Reviewed {self.last_tool_name or 'tool'} results and determined next action."
+                fallback = f"Reviewed {tool_name or 'tool'} results and determined next action."
                 self.emit_ui_event({"type": "reasoning", "content": fallback})
                 self._emitted_any_reasoning = True
                 self._reasoning_emitted_since_last_step_header = True
