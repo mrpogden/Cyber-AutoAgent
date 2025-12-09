@@ -75,10 +75,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/cyber-autoagent/cyber-autoagent"
-Repository = "https://github.com/cyber-autoagent/cyber-autoagent"
-Documentation = "https://github.com/cyber-autoagent/cyber-autoagent#readme"
-"Bug Tracker" = "https://github.com/cyber-autoagent/cyber-autoagent/issues"
+Homepage = "https://github.com/double16/cyber-autoagent"
+Repository = "https://github.com/double16/cyber-autoagent"
+Documentation = "https://github.com/double16/cyber-autoagent#readme"
+"Bug Tracker" = "https://github.com/double16/cyber-autoagent/issues"
 
 [project.scripts]
 caa = "cyberautoagent:main"

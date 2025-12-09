@@ -146,7 +146,7 @@ Cyber-AutoAgent supports **300+ LLM providers** via LiteLLM. Examples:
 
 ```bash
 # Clone the repository
-git clone https://github.com/cyber-autoagent/cyber-autoagent.git
+git clone https://github.com/double16/cyber-autoagent.git
 cd cyber-autoagent
 
 # Build and run with Docker Compose (includes observability)

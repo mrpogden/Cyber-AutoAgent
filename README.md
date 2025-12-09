@@ -82,7 +82,7 @@ caa --target "http://example.com" --objective "Security assessment"
 
 ```bash
 # Clone and setup
-git clone https://github.com/westonbrown/Cyber-AutoAgent.git
+git clone https://github.com/double16/Cyber-AutoAgent.git
 cd Cyber-AutoAgent
 
 # Install in editable mode
@@ -555,11 +555,25 @@ ollama pull qwen3-coder:30b-a3b-q4_K_M
 ollama pull mxbai-embed-large
 ```
 
+Most models ship with a context window size of 4096, some with 8192. Neither are large enough for quality results. The model
+may advertise a higher context window, but it needs to be set using a derived model.
+
+```bash
+cat > Modelfile <<EOF
+FROM qwen3-coder:30b-a3b-q8_0
+PARAMETER num_ctx 32768
+EOF
+
+ollama create qwen3-coder-30b:32k -f Modelfile
+```
+
+Configure the system to use model `qwen3-coder-30b:32k`. Other models can have the context window extended in this way.
+
 ### Docker Deployment (Recommended)
 
 ```bash
 # Clone repository
-git clone https://github.com/cyber-autoagent/cyber-autoagent.git
+git clone https://github.com/double16/cyber-autoagent.git
 cd cyber-autoagent
 
 # Build image
@@ -583,7 +597,7 @@ docker run --rm \
 
 ```bash
 # Clone repository
-git clone https://github.com/cyber-autoagent/cyber-autoagent.git
+git clone https://github.com/double16/cyber-autoagent.git
 cd cyber-autoagent
 
 # Create virtual environment
