@@ -6,6 +6,7 @@ import logging
 import os
 import warnings
 from datetime import datetime
+from math import ceil
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -27,7 +28,7 @@ from strands_tools import (
     stop,
 )
 
-from modules import prompts
+from modules import prompts, __version__
 from modules.config import (
     AgentConfig,
     align_mem0_config,
@@ -35,7 +36,6 @@ from modules.config import (
     configure_sdk_logging,
     get_config_manager,
 )
-from modules.config.types import MCPConnection, ServerConfig
 from modules.config.system.logger import get_logger
 from modules.config.models.factory import (
     create_bedrock_model,
@@ -45,7 +45,6 @@ from modules.config.models.factory import (
     _handle_model_creation_error,
     _resolve_prompt_token_limit,
 )
-from modules.handlers import ReasoningHandler
 from modules.handlers.conversation_budget import (
     MappingConversationManager,
     PromptBudgetHook,
@@ -55,14 +54,14 @@ from modules.handlers.conversation_budget import (
     PRESERVE_LAST_DEFAULT,
     PRESERVE_FIRST_DEFAULT,
 )
+from modules.handlers.react import ReactBridgeHandler
 from modules.handlers.tool_router import ToolRouterHook
 from modules.config.models.capabilities import get_capabilities
-from modules.handlers.utils import print_status, sanitize_target_name, get_output_path
-from strands.tools.mcp.mcp_client import MCPClient
+from modules.handlers.utils import print_status, sanitize_target_name
 
 from modules.tools.mcp import (
     discover_mcp_tools,
-    mcp_tools_input_schema_to_function_call,
+    mcp_tool_catalog,
 )
 from modules.tools.memory import (
     get_memory_client,
@@ -106,7 +105,7 @@ def create_agent(
     target: str,
     objective: str,
     config: Optional[AgentConfig] = None,
-) -> Tuple[Agent, ReasoningHandler]:
+) -> Tuple[Agent, ReactBridgeHandler]:
     """Create autonomous agent"""
 
     # Enable comprehensive SDK logging for debugging
@@ -380,7 +379,7 @@ Command line tools available using the **shell** tool:
 ### MCP TOOLS
 
 Available {config.module} MCP tools:
-{chr(10).join(f"- {mcp_tools_input_schema_to_function_call(mcp_tool.tool_spec.get('inputSchema'), mcp_tool.tool_name)}" for mcp_tool in mcp_tools)}
+{chr(10).join(f"- {mcp_tool.tool_name}" for mcp_tool in mcp_tools)}
 """
     else:
         mcp_tools_context = ""
@@ -684,19 +683,36 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         emitter=callback_handler.emitter, operation_id=operation_id
     )
 
+    # Create agent with telemetry for token tracking
+    prompt_token_limit = _resolve_prompt_token_limit(
+        config.provider, server_config, config.model_id
+    )
+
     # Tool router to prevent unknown-tool failures by routing to shell before execution
     # Allow configurable truncation of large tool outputs via env var
-    # TODO: make the default a ratio of the context size and/or input tokens
+    computed_max_results_chars = min(ceil(prompt_token_limit * 0.10), 30000)
     try:
-        max_result_chars = int(os.getenv("CYBER_TOOL_MAX_RESULT_CHARS", "30000"))
+        max_result_chars = int(os.getenv("CYBER_TOOL_MAX_RESULT_CHARS", str(computed_max_results_chars)))
     except Exception:
-        max_result_chars = 30000
+        max_result_chars = computed_max_results_chars
+
+    if max_result_chars < 4000:
+        computed_artifact_threshold = max_result_chars
+    else:
+        computed_artifact_threshold = max(ceil(max_result_chars / 3), 2000)
     try:
         artifact_threshold = int(
-            os.getenv("CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD", "10000")
+            os.getenv("CYBER_TOOL_RESULT_ARTIFACT_THRESHOLD", str(computed_artifact_threshold))
         )
     except Exception:
-        artifact_threshold = 10000
+        artifact_threshold = computed_artifact_threshold
+
+    if artifact_threshold > max_result_chars:
+        logger.warning("Artifact threshold %d > max tool result chars %d, tool result with size in [%d, %d] will be lost",
+                       artifact_threshold, max_result_chars, max_result_chars, artifact_threshold)
+    else:
+        logger.info("Artifact threshold %d, max tool result chars %d", artifact_threshold, max_result_chars)
+
     tool_router_hook = ToolRouterHook(
         shell,
         max_result_chars=max_result_chars,
@@ -847,11 +863,6 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         PRESERVE_LAST_DEFAULT,
     )
 
-    # Create agent with telemetry for token tracking
-    prompt_token_limit = _resolve_prompt_token_limit(
-        config.provider, server_config, config.model_id
-    )
-
     # Initialize concurrent tool executor for parallel execution
     tool_executor = ConcurrentToolExecutor()
 
@@ -895,7 +906,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
             "user.id": f"cyber-agent-{config.target}",
             # Agent identification
             "agent.name": "Cyber-AutoAgent",
-            "agent.version": "1.0.0",
+            "agent.version": __version__,
             "gen_ai.agent.name": "Cyber-AutoAgent",
             "gen_ai.system": "Cyber-AutoAgent",
             # Operation metadata

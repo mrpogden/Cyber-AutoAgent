@@ -630,7 +630,7 @@ def main():
 
     try:
         # Create agent
-        logger.warning("Creating agent with iterations=%d", args.iterations)
+        logger.info("Creating agent with iterations=%d", args.iterations)
         config = AgentConfig(
             target=args.target,
             objective=args.objective,
@@ -703,7 +703,7 @@ def main():
                                 metrics_obj = MetricsObject(
                                     result.metrics.accumulated_usage
                                 )
-                                callback_handler._process_metrics(metrics_obj)
+                                callback_handler.process_metrics(metrics_obj)
 
                     # Check if we should continue
                     if callback_handler and callback_handler.should_stop():
@@ -791,7 +791,8 @@ def main():
                                 ),
                             }
                             # Use handler's emitter directly
-                            callback_handler._emit_ui_event(termination_event)  # noqa: SLF001 (internal method okay for UI)
+                            callback_handler.emit_ui_event(
+                                termination_event)  # noqa: SLF001 (internal method okay for UI)
                             # Generate the report immediately
                             callback_handler.ensure_report_generated(
                                 agent, args.target, args.objective, args.module
@@ -824,7 +825,7 @@ def main():
                                     callback_handler, "max_steps", args.iterations
                                 ),
                             }
-                            callback_handler._emit_ui_event(termination_event)  # noqa: SLF001
+                            callback_handler.emit_ui_event(termination_event)  # noqa: SLF001
                             callback_handler.ensure_report_generated(
                                 agent, args.target, args.objective, args.module
                             )
@@ -855,7 +856,7 @@ def main():
                                         callback_handler, "max_steps", args.iterations
                                     ),
                                 }
-                                callback_handler._emit_ui_event(termination_event)  # noqa: SLF001
+                                callback_handler.emit_ui_event(termination_event)  # noqa: SLF001
                                 callback_handler.ensure_report_generated(
                                     agent, args.target, args.objective, args.module
                                 )
@@ -1017,7 +1018,7 @@ def main():
             try:
                 if callback_handler:
                     # Idempotent termination helper emits thinking_end, a final TERMINATED header, and the reason
-                    callback_handler._emit_termination(
+                    callback_handler.emit_termination(
                         "user_abort", "Operation cancelled by user"
                     )  # noqa: SLF001
             except Exception:

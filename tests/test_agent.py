@@ -157,7 +157,7 @@ class TestMemoryConfig:
                 with patch("modules.agents.cyber_autoagent.Agent") as mock_agent_class:
                     mock_agent_class.return_value = Mock()
                     with patch(
-                        "modules.agents.cyber_autoagent.ReasoningHandler"
+                        "modules.handlers.react.ReactBridgeHandler"
                     ) as mock_handler:
                         mock_handler.return_value = Mock()
                         with patch("modules.agents.cyber_autoagent.get_system_prompt"):
@@ -194,7 +194,7 @@ class TestMemoryConfig:
                 with patch("modules.agents.cyber_autoagent.Agent") as mock_agent_class:
                     mock_agent_class.return_value = Mock()
                     with patch(
-                        "modules.agents.cyber_autoagent.ReasoningHandler"
+                        "modules.handlers.react.ReactBridgeHandler"
                     ) as mock_handler:
                         mock_handler.return_value = Mock()
                         with patch("modules.agents.cyber_autoagent.get_system_prompt"):

@@ -16,9 +16,14 @@ from __future__ import annotations
 import logging
 import os
 import re
+import ollama
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional, Tuple
+
+from modules.config.providers import get_ollama_host
+from modules.config.providers.ollama_config import get_ollama_timeout
+from modules.config.system import EnvironmentReader
 
 logger = logging.getLogger(__name__)
 
@@ -222,22 +227,20 @@ class ModelCapabilitiesResolver:
 
         # Check Ollama capabilities
         if base_provider == "ollama":
-            api_base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
+            env_reader = EnvironmentReader()
+            ollama_client = ollama.Client(host=get_ollama_host(env_reader), timeout=get_ollama_timeout(env_reader))
 
             try:
-                response = litellm.module_level_client.post(
-                    url=f"{api_base}/api/show",
-                    json={"name": model},
-                )
-                model_info = response.json()
-                model_capabilities = model_info.get("capabilities", {})
-                if "tools" in model_capabilities:
-                    allowed_params.extend(["tools", "tool_choice"])
+                show_response = ollama_client.show(model=model)
+                if show_response.capabilities:
+                    if "tools" in show_response.capabilities:
+                        allowed_params.extend(["tools", "tool_choice"])
+                    if "thinking" in show_response.capabilities:
+                        allowed_params.append("thinking")
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     f"OllamaError: Error getting model info for {model}. Set Ollama API Base via `OLLAMA_API_BASE` environment variable."
                 )
-
 
         lowered = {p.lower() for p in allowed_params}
         if ("thinking" in lowered) or ("reasoning_effort" in lowered):

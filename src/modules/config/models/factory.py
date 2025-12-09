@@ -10,11 +10,16 @@ applying provider-specific settings, and managing credentials.
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+import ollama
+
 from strands.models import BedrockModel
 from strands.models.litellm import LiteLLMModel
 from strands.models.ollama import OllamaModel
 from strands.models.gemini import GeminiModel
 
+from modules.config.providers import get_ollama_host
+from modules.config.providers.ollama_config import get_ollama_timeout
+from modules.config.system import EnvironmentReader
 from modules.config.system.logger import get_logger
 from modules.config.models.capabilities import (
     get_model_input_limit,
@@ -189,7 +194,27 @@ def _resolve_prompt_token_limit(
         )
         return limit
 
-    # Priority 3: LiteLLM automatic detection (check max_input_tokens)
+    # Priority 3: Ollama metadata
+    if provider == "ollama" and model_id:
+        env_reader = EnvironmentReader()
+        ollama_client = ollama.Client(host=get_ollama_host(env_reader), timeout=get_ollama_timeout(env_reader))
+
+        try:
+            show_response = ollama_client.show(model=model_id)
+            if show_response.parameters:
+                ollama_parameters = dict()
+                for line in show_response.parameters.splitlines(keepends=False):
+                    k, v = line.split(sep=None, maxsplit=1)
+                    ollama_parameters[k] = v
+                if "num_ctx" in ollama_parameters:
+                    return int(ollama_parameters["num_ctx"])
+
+        except Exception as e:
+            logger.warning(
+                f"OllamaError: Error getting model info for {model_id}."
+            )
+
+    # Priority 4: LiteLLM automatic detection (check max_input_tokens)
     if provider == "litellm" and model_id:
         limit = _get_prompt_limit_from_model(model_id)
         if limit:
@@ -198,7 +223,7 @@ def _resolve_prompt_token_limit(
             )
             return limit
 
-    # Priority 4: CYBER_CONTEXT_LIMIT (explicit context limit config)
+    # Priority 5: CYBER_CONTEXT_LIMIT (explicit context limit config)
     if PROMPT_TOKEN_FALLBACK_LIMIT > 0:
         logger.info(
             "Using CYBER_CONTEXT_LIMIT=%d as fallback for model %s",
@@ -207,7 +232,7 @@ def _resolve_prompt_token_limit(
         )
         return PROMPT_TOKEN_FALLBACK_LIMIT
 
-    # Priority 5: Provider-specific conservative defaults
+    # Priority 6: Provider-specific conservative defaults
     provider_default = get_provider_default_limit(provider)
     if provider_default:
         logger.warning(
