@@ -42,6 +42,7 @@ github.com/nicocha30/ligolo-ng/cmd/proxy@latest \
 github.com/hahwul/dalfox/v2@latest \
 github.com/jpillora/chisel@latest \
 github.com/ropnop/kerbrute@latest \
+github.com/tomnomnom/qsreplace@latest \
 		; do
 		go install ${GOPKG}
 	done
@@ -76,4 +77,5 @@ test -x ${TARGET_DIR}/interactsh-client
 test -x ${TARGET_DIR}/dalfox
 test -x ${TARGET_DIR}/chisel
 test -x ${TARGET_DIR}/kerbrute
+test -x ${TARGET_DIR}/qsreplace
 test -x ${TARGET_DIR}/sqlcmd

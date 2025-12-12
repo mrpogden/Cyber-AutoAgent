@@ -301,6 +301,14 @@ RUN git clone --depth=1 https://github.com/internetwache/GitTools.git /opt/gitto
 # Install PwnCat-CS (Advanced Reverse Shell Handler)
 RUN pipx install --global pwncat-cs
 
+# Install paramspider (Mining URLs from dark corners of Web Archives for bug hunting/fuzzing/further probing)
+RUN pipx install --global git+https://github.com/devanshbatham/paramspider.git
+
+# Install Corsy (Scan for CORS misconfigurations) - Optional
+RUN git clone --depth=1 --depth=1 https://github.com/s0md3v/Corsy.git /opt/corsy && \
+    chmod +x /opt/corsy/corsy.py && \
+    ln -sf /opt/corsy/corsy.py /usr/local/bin/corsy || true
+
 # Install RsaCtfTool (RSA Attacks) - requires GMP/MPFR libraries, python 3.9
 #RUN apt update && apt install -y --no-install-recommends \
 #    libgmp-dev libmpfr-dev libmpc-dev && \
@@ -326,7 +334,7 @@ RUN useradd --create-home --shell /bin/bash cyberagent && \
 # Install Sliver (C2 Framework - Client only) - Optional, may fail on ARM64
 RUN mkdir -p /home/cyberagent/sliver && \
     cd /home/cyberagent/sliver && \
-    apt update && \
+    apt update &&\
     ( curl --silent https://sliver.sh/install | bash || true ) && \
     chown -R cyberagent:cyberagent /home/cyberagent/sliver && \
     apt clean && rm -rf /var/lib/apt/lists/*

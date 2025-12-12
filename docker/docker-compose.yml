@@ -59,6 +59,7 @@ services:
       - DEV=true
       - FORCE_COLOR=1
       - CONTAINER=docker  # Mark as Docker environment for React terminal detection
+      - TOKENIZERS_PARALLELISM=true
 
       # Observability configuration (auto-detected by default, forced true in compose mode)
       - ENABLE_OBSERVABILITY=${ENABLE_OBSERVABILITY:-true}

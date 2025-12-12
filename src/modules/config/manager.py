@@ -113,6 +113,10 @@ class ConfigManager:
         """Get environment variable as float."""
         return self.env.get_float(key, default)
 
+    def get_provider(self) -> str:
+        provider = self.getenv("CYBER_AGENT_PROVIDER", "bedrock")
+        return provider
+
     def get_default_region(self) -> str:
         """Get the default AWS region with environment override support."""
         return get_default_region(self.env)
@@ -454,9 +458,7 @@ class ConfigManager:
             if swarm_llm is unavailable for the provider.
         """
         try:
-            provider = (
-                server or self.getenv("CYBER_AGENT_PROVIDER", "bedrock")
-            ).lower()
+            provider = self.get_provider()
             server_config = self.get_server_config(provider, **overrides)
             # Prefer explicit swarm config when available
             if (

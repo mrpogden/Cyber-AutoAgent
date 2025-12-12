@@ -136,7 +136,7 @@ def _get_env_float(name: str, default: float) -> float:
 # Named constants for prompt budget configuration
 # CYBER_CONTEXT_LIMIT is the preferred name
 def _get_context_limit() -> int:
-    """Get context limit, preferring new name over legacy."""
+    """Get context limit."""
     new_val = os.getenv("CYBER_CONTEXT_LIMIT")
     if new_val:
         try:

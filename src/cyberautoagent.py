@@ -60,7 +60,9 @@ from modules.handlers.utils import (
     print_section,
     print_status,
     sanitize_target_name,
+    dumpstacks,
 )
+from modules.tools import browser
 
 load_dotenv()
 
@@ -273,6 +275,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTSTP, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGUSR1, dumpstacks)
 
     # Check for service mode before normal argument parsing to avoid validation issues
     is_service_mode = "--service-mode" in sys.argv
@@ -319,7 +322,7 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        help="Model ID to use (defaults configured in config.py)",
+        help="Model ID to use (defaults configured in defaults.py)",
     )
     parser.add_argument(
         "--region",
@@ -1023,13 +1026,12 @@ def main():
                     )  # noqa: SLF001
             except Exception:
                 pass
-            # Exit gracefully to allow event flushing and frontend to handle "stopped" state
-            # Use 130 (SIGINT) to indicate an intentional interrupt
-            sys.exit(130)
         else:
             print_status("\nOperation cancelled by user", "WARNING")
-            # Skip cleanup on interrupt for faster exit
-            os._exit(1)
+
+        # Exit gracefully to allow event flushing and frontend to handle "stopped" state
+        # Use 130 (SIGINT) to indicate an intentional interrupt
+        sys.exit(130)
 
     except Exception as e:
         print_status(f"\nOperation failed: {str(e)}", "ERROR")
@@ -1037,6 +1039,8 @@ def main():
         sys.exit(1)
 
     finally:
+        browser.close_browser()
+
         # Ensure log files are properly closed before exit
         def close_log_outputs():
             if hasattr(sys.stdout, "close") and hasattr(sys.stdout, "log"):

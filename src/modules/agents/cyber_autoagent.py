@@ -19,7 +19,6 @@ from strands.tools.executors import ConcurrentToolExecutor
 from strands_tools.editor import editor
 from strands_tools.load_tool import load_tool
 from strands_tools.shell import shell
-from strands_tools.swarm import swarm
 
 # These tools are modules, not functions, the following imports MUST import the module
 from strands_tools import (
@@ -38,12 +37,7 @@ from modules.config import (
 )
 from modules.config.system.logger import get_logger
 from modules.config.models.factory import (
-    create_bedrock_model,
-    create_ollama_model,
-    create_litellm_model,
-    create_gemini_model,
-    _handle_model_creation_error,
-    _resolve_prompt_token_limit,
+    _resolve_prompt_token_limit, create_strands_model,
 )
 from modules.handlers.conversation_budget import (
     MappingConversationManager,
@@ -53,11 +47,14 @@ from modules.handlers.conversation_budget import (
     _ensure_prompt_within_budget,
     PRESERVE_LAST_DEFAULT,
     PRESERVE_FIRST_DEFAULT,
+    TOOL_COMPRESS_THRESHOLD,
+    TOOL_COMPRESS_TRUNCATE,
 )
 from modules.handlers.react import ReactBridgeHandler
 from modules.handlers.tool_router import ToolRouterHook
 from modules.config.models.capabilities import get_capabilities
 from modules.handlers.utils import print_status, sanitize_target_name
+from modules.tools import swarm
 
 from modules.tools.mcp import (
     discover_mcp_tools,
@@ -256,6 +253,10 @@ def create_agent(
     else:
         logger.info("Artifact threshold %d, max tool result chars %d", artifact_threshold, max_result_chars)
 
+    global TOOL_COMPRESS_THRESHOLD, TOOL_COMPRESS_TRUNCATE
+    TOOL_COMPRESS_THRESHOLD = artifact_threshold
+    TOOL_COMPRESS_TRUNCATE = max_result_chars
+
     initialize_browser(
         provider=config.provider,
         model=config.model_id,
@@ -402,7 +403,7 @@ Command line tools available using the **shell** tool:
 """
 
     # Load MCP tools and prepare for injection
-    mcp_tools = discover_mcp_tools(config, server_config, artifact_threshold)
+    mcp_tools = discover_mcp_tools(config)
     if mcp_tools:
         tool_count += len(mcp_tools)
         mcp_tools_context = f"""
@@ -410,6 +411,8 @@ Command line tools available using the **shell** tool:
 
 Available {config.module} MCP tools:
 {chr(10).join(f"- {mcp_tool.tool_name}" for mcp_tool in mcp_tools)}
+
+Prefer MCP tools over command line tools that offer similar capabilities.
 """
     else:
         mcp_tools_context = ""
@@ -712,7 +715,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
 
     # Use the same emitter as the callback handler for consistency
     react_hooks = ReactHooks(
-        emitter=callback_handler.emitter, operation_id=operation_id
+        emitter=callback_handler.emitter, operation_id=operation_id, agent_config=config
     )
 
     tool_router_hook = ToolRouterHook(
@@ -750,39 +753,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         )
         hooks.append(prompt_rebuild_hook)
 
-    # Create model based on provider type
-    try:
-        if config.provider == "ollama":
-            agent_logger.debug("Configuring OllamaModel")
-            model = create_ollama_model(config.model_id, config.provider)
-            print_status(f"Ollama model initialized: {config.model_id}", "SUCCESS")
-        elif config.provider == "bedrock":
-            agent_logger.debug("Configuring BedrockModel")
-            # Check for effort configuration (Opus 4.5 feature)
-            effort = os.getenv("BEDROCK_EFFORT")
-            model = create_bedrock_model(
-                config.model_id, config.region_name, config.provider, effort=effort
-            )
-            print_status(f"Bedrock model initialized: {config.model_id}", "SUCCESS")
-        elif config.provider == "litellm":
-            agent_logger.debug("Configuring LiteLLMModel")
-            model = create_litellm_model(
-                config.model_id, config.region_name, config.provider
-            )
-            print_status(f"LiteLLM model initialized: {config.model_id}", "SUCCESS")
-        elif config.provider == "gemini":
-            agent_logger.debug("Configuring native GeminiModel")
-            model = create_gemini_model(
-                config.model_id, config.region_name, config.provider
-            )
-            print_status(f"Native Gemini model initialized: {config.model_id}", "SUCCESS")
-        else:
-            raise ValueError(f"Unsupported provider: {config.provider}")
-
-    except Exception as e:
-        _handle_model_creation_error(config.provider, e)
-        # Re-raise to satisfy tests expecting exception propagation after logging
-        raise
+    model = create_strands_model(config.provider, config.model_id)
 
     # Always use original tools - event emission is handled by callback
     tools_list = [
@@ -855,7 +826,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         summary_ratio=0.3,
         preserve_recent_messages=PRESERVE_LAST_DEFAULT,  # Env default: 5 (reduced from 12)
         preserve_first_messages=PRESERVE_FIRST_DEFAULT,  # Env default: 1 (scripts often use 3)
-        tool_result_mapper=LargeToolResultMapper(),
+        tool_result_mapper=LargeToolResultMapper(max_tool_chars=ceil(artifact_threshold/2), truncate_at=ceil(max_result_chars/2)),
     )
     register_conversation_manager(conversation_manager)
     agent_logger.info(

@@ -6,12 +6,10 @@ import json
 import os
 import re
 import threading
-import time
 import atexit
 import signal
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, cast
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from mcp.client.session import ClientSession
 from mcp import StdioServerParameters, stdio_client
@@ -19,12 +17,12 @@ from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.sse import sse_client
 
 from strands.types.exceptions import MCPClientInitializationError
-from strands.types.tools import AgentTool, ToolGenerator, ToolResult, ToolSpec, ToolUse
+from strands.types.tools import AgentTool, ToolGenerator, ToolSpec, ToolUse
 from strands.tools.mcp.mcp_client import MCPClient
 
 from modules.config import AgentConfig, ServerConfig
 from modules.config.system.logger import get_logger
-from modules.handlers.utils import sanitize_target_name, get_output_path, print_status
+from modules.handlers.utils import print_status
 
 logger = get_logger("Agents.CyberAutoAgent")
 
@@ -389,155 +387,7 @@ def shorten_description(text: str, max_len: int) -> str:
     return text[:max_len].rstrip()
 
 
-class FileWritingAgentToolAdapter(AgentTool):
-    """
-    Adapter that wraps an AgentTool and sends its streamed events through
-    FileWritingToolGenerator to persist ToolResultEvent results to files.
-    """
-
-    def __init__(self, inner: AgentTool, output_base_path: Path, artifact_threshold: int) -> None:
-        super().__init__()
-        self._inner = inner
-        self._output_base_path = output_base_path
-        self._artifact_threshold = artifact_threshold
-
-    @property
-    def tool_name(self) -> str:
-        return self._inner.tool_name
-
-    @property
-    def tool_spec(self) -> ToolSpec:
-        return self._inner.tool_spec
-
-    @property
-    def tool_type(self) -> str:
-        # Delegate if present; fall back to the inner's type or "python"
-        return getattr(self._inner, "tool_type", "python")
-
-    @property
-    def supports_hot_reload(self) -> bool:
-        return False
-
-    @property
-    def is_dynamic(self) -> bool:
-        return False
-
-    def stream(
-            self,
-            tool_use: ToolUse,
-            invocation_state: dict[str, Any],
-            **kwargs: Any,
-    ) -> ToolGenerator:
-        inner_gen = self._inner.stream(tool_use, invocation_state, **kwargs)
-
-        async def _wrapped() -> ToolGenerator:
-            async for event in inner_gen:
-                if self._is_tool_result_event(event):
-                    # offload sync file IO to a thread so we don't block the event loop
-                    try:
-                        tool_result = getattr(event, "tool_result", None)
-                        output_paths, output_size = await asyncio.to_thread(self._write_result, tool_result)
-
-                        if output_size > self._artifact_threshold:
-                            # Large output: externalize and provide preview + path
-                            summary = {"artifact_paths": output_paths, "has_more": True}
-                            preview_text = ""
-                            # Extract preview from original content
-                            if "content" in tool_result and isinstance(tool_result["content"], list):
-                                for block in tool_result["content"]:
-                                    if isinstance(block, dict) and "text" in block:
-                                        preview_text = str(block["text"])[:4000]  # 4KB preview
-                                        break
-
-                            preview_msg = f"[Tool output: {output_size:,} chars | Full output saved to artifact]\n\n{preview_text}\n\n... [truncated, full output in artifact]"
-                            tool_result["content"] = [
-                                {"text": preview_msg},
-                                {"text": json.dumps(summary), "json": summary}
-                            ]
-                            tool_result["structuredContent"] = summary
-                        else:
-                            # Small output: keep in conversation, just add artifact reference
-                            tool_result["structuredContent"]["artifact_paths"] = output_paths
-                            if "content" in tool_result and isinstance(tool_result["content"], list):
-                                summary = {"artifact_paths": output_paths}
-                                tool_result["content"].append({"text": json.dumps(summary), "json": summary})
-
-                    except Exception:
-                        logger.debug(
-                            "Failed to write ToolResultEvent result",
-                            exc_info=True,
-                        )
-                yield event
-
-        return _wrapped()
-
-    def __getattr__(self, name: str):
-        # Only called if the attribute isn't found on self
-        return getattr(self._inner, name)
-
-    def _write_result(self, result: ToolResult) -> Tuple[List[str], int]:
-        output_paths = []
-        size = 0
-        try:
-            output_basename = f"output_{time.time_ns()}"
-            self._output_base_path.mkdir(parents=True, exist_ok=True)
-            for idx, content in enumerate(result.get("content", [])):
-                # ToolResultContent
-
-                if "json" in content:
-                    output_path = Path(os.path.join(self._output_base_path, f"{output_basename}_{idx}.json"))
-                    with output_path.open("a", encoding="utf-8") as f:
-                        f.write(json.dumps(content.get("json", "")))
-                    output_paths.append(output_path)
-                    size += output_path.stat().st_size
-
-                if "text" in content:
-                    output_path = Path(os.path.join(self._output_base_path, f"{output_basename}_{idx}.txt"))
-                    with output_path.open("a", encoding="utf-8") as f:
-                        f.write(content.get("text", ""))
-                    output_paths.append(output_path)
-                    size += output_path.stat().st_size
-
-                for file_type in ["document", "image"]:
-                    if file_type in content:
-                        document: TypedDict = content.get(file_type)
-                        ext = sanitize_target_name(document.get("format", "bin"))
-                        output_path = Path(os.path.join(self._output_base_path, f"{output_basename}_{idx}.{ext}"))
-                        with output_path.open("ab") as f:
-                            f.write(document.get("source", {}).get("bytes", b''))
-                        output_paths.append(output_path)
-                        size += output_path.stat().st_size
-
-            return list(map(str, output_paths)), size
-        except Exception:
-            logger.debug(
-                "Failed to write ToolResultEvent result to %s",
-                str(self._output_base_path),
-                exc_info=True,
-            )
-            return [], 0
-
-    @staticmethod
-    def _is_tool_result_event(event: Any) -> bool:
-        try:
-            name = event.__class__.__name__
-            if name == "ToolResultEvent":
-                return True
-            # Heuristic fallback for environments where the class cannot be imported
-            return hasattr(event, "tool_result") and not hasattr(event, "delta")
-        except Exception:
-            return False
-
-
-def with_result_file(tool: AgentTool, output_base_path: Path, artifact_threshold: int) -> AgentTool:
-    """
-    Convenience helper to wrap an AgentTool so its streamed results
-    are persisted via FileWritingToolGenerator.
-    """
-    return FileWritingAgentToolAdapter(tool, output_base_path, artifact_threshold)
-
-
-def discover_mcp_tools(config: AgentConfig, server_config: ServerConfig, artifact_threshold: int) -> List[AgentTool]:
+def discover_mcp_tools(config: AgentConfig) -> List[AgentTool]:
     """Discover and register MCP tools from configured connections."""
     tool_discovery_event = {
         "type": "tool_discovery_start",
@@ -600,14 +450,6 @@ def discover_mcp_tools(config: AgentConfig, server_config: ServerConfig, artifac
                             except ValueError:
                                 pass
 
-                            # Wrap output and save into output path
-                            output_base_path = get_output_path(
-                                sanitize_target_name(config.target),
-                                config.op_id,
-                                sanitize_target_name(tool.tool_name),
-                                server_config.output.base_dir,
-                            )
-                            tool = with_result_file(tool, Path(output_base_path), artifact_threshold)
                             tool = ResilientMCPToolAdapter(tool, client)
                             mcp_tools.append(tool)
                             client_used = True
@@ -635,6 +477,8 @@ def discover_mcp_tools(config: AgentConfig, server_config: ServerConfig, artifac
 
                 if client_used:
                     atexit.register(client_stop)
+                    signal.signal(signal.SIGINT, client_stop)
+                    signal.signal(signal.SIGTSTP, client_stop)
                     signal.signal(signal.SIGTERM, client_stop)
                 else:
                     client_stop()

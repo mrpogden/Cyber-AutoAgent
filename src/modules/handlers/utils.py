@@ -12,7 +12,9 @@ import pathlib
 import re
 import shutil
 import sys
+import threading
 import tomllib
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -451,3 +453,21 @@ def emit_error(error: str) -> None:
 def emit_status(message: str, level: str = "info") -> None:
     """Emit a status message event."""
     emit_event("status", message, level=level)
+
+
+def dumpstacks(signal, frame):
+    id2name = dict([(th.ident, th.name) for th in threading.enumerate()])
+    trace = []
+    for threadId, stack in sys._current_frames().items():
+        trace.append("\n# Thread: %s(%d)" % (id2name.get(threadId, ""), threadId))
+        for filename, lineno, name, line in traceback.extract_stack(stack):
+            trace.append('File: "%s", line %d, in %s' % (filename, lineno, name))
+            if line:
+                trace.append("  %s" % (line.strip()))
+    print("\n".join(trace))
+    try:
+        from guppy import hpy
+        h = hpy()
+        print("\n".join(h.heap()[0:12]))
+    except ImportError:
+        pass

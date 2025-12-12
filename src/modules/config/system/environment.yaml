@@ -62,6 +62,12 @@ cyber_tools:
     description: "Web application bruteforcer"
   wpscan:
     description: "WordPress security scanner"
+  corsy:
+    description: "Scan websites for Cross-Origin Resource Sharing (CORS) misconfigurations"
+  paramspider:
+    description: "Mining URLs from dark corners of Web Archives for bug hunting/fuzzing/further probing"
+  qsreplace:
+    description: "Replace all query string values with a user-supplied value"
 
   # Web recon helpers
   gospider:

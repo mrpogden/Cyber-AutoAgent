@@ -6,13 +6,13 @@ This module contains all model instantiation logic for Bedrock, Ollama, and Lite
 Model creation is a configuration concern because it involves reading configuration,
 applying provider-specific settings, and managing credentials.
 """
-
+import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import ollama
 
-from strands.models import BedrockModel
+from strands.models import BedrockModel, Model
 from strands.models.litellm import LiteLLMModel
 from strands.models.ollama import OllamaModel
 from strands.models.gemini import GeminiModel
@@ -839,3 +839,49 @@ def create_gemini_model(
         model_id=clean_model_id,
         params=params,
     )
+
+
+def create_strands_model(provider: Optional[str] = None, model_id: Optional[str] = None) -> Model:
+    """ Create model based on provider type """
+    agent_logger = logging.getLogger("CyberAutoAgent")
+
+    config_manager = _get_config_manager()
+    if not provider:
+        provider = config_manager.get_provider()
+    if not model_id:
+        model_id = config_manager.get_llm_config(provider).model_id
+
+    try:
+        if provider == "ollama":
+            agent_logger.debug("Configuring OllamaModel")
+            model = create_ollama_model(model_id, provider)
+            print_status(f"Ollama model initialized: {model_id}", "SUCCESS")
+        elif provider == "bedrock":
+            agent_logger.debug("Configuring BedrockModel")
+            # Check for effort configuration (Opus 4.5 feature)
+            effort = os.getenv("BEDROCK_EFFORT")
+            model = create_bedrock_model(
+                model_id, config_manager.get_default_region(), provider, effort=effort
+            )
+            print_status(f"Bedrock model initialized: {model_id}", "SUCCESS")
+        elif provider == "litellm":
+            agent_logger.debug("Configuring LiteLLMModel")
+            model = create_litellm_model(
+                model_id, config_manager.get_default_region(), provider
+            )
+            print_status(f"LiteLLM model initialized: {model_id}", "SUCCESS")
+        elif provider == "gemini":
+            agent_logger.debug("Configuring native GeminiModel")
+            model = create_gemini_model(
+                model_id, config_manager.get_default_region(), provider
+            )
+            print_status(f"Native Gemini model initialized: {model_id}", "SUCCESS")
+        else:
+            raise ValueError(f"Unsupported provider: {provider}")
+
+        return model
+
+    except Exception as e:
+        _handle_model_creation_error(provider, e)
+        # Re-raise to satisfy tests expecting exception propagation after logging
+        raise

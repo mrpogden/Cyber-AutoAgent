@@ -1092,7 +1092,7 @@ class TestEnvironmentIntegration:
         # Test local model configuration
         local_config = config_manager.get_local_model_config("llama3.2:3b", "ollama")
         assert local_config["temperature"] == 0.95
-        assert local_config["max_tokens"] == 65000
+        assert local_config["max_tokens"] == 8192
         assert "host" in local_config
         assert local_config["host"].startswith("http://")
 

@@ -14,7 +14,6 @@ from http.cookies import SimpleCookie
 from typing import Optional, Any, Union
 from urllib.parse import urlparse, parse_qs
 from modules import __version__
-from concurrent.futures import ThreadPoolExecutor
 
 from playwright.async_api import (
     Page,
@@ -177,10 +176,6 @@ class BrowserService(EventEmitter):
         # Dedicated event loop running in its own thread via ThreadPoolExecutor
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_ready = threading.Event()
-        self._executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="BrowserService",
-        )
 
         def _loop_runner() -> None:
             loop = asyncio.new_event_loop()
@@ -188,9 +183,10 @@ class BrowserService(EventEmitter):
             self._loop = loop
             self._loop_ready.set()
             loop.run_forever()
+            loop.close()
 
-        # Start the browser event loop in the executor thread
-        self._executor.submit(_loop_runner)
+        self._loop_thread = threading.Thread(target=_loop_runner, name="BrowserService", daemon=True)
+        self._loop_thread.start()
         self._loop_ready.wait()
 
         # Stagehand instance will be used exclusively from the dedicated event loop
@@ -841,6 +837,22 @@ async def get_browser():
     with _BROWSER_LOCK:
         await _BROWSER.ensure_init()
     yield _BROWSER
+
+
+def close_browser():
+    """Closes the browser if it has been initialized. If never initialized, this method returns without error."""
+    global _BROWSER
+    if _BROWSER:
+        logger.debug("Closing BrowserService")
+        with _BROWSER_LOCK:
+            try:
+                asyncio.run_coroutine_threadsafe(_BROWSER.stagehand.reset(), _BROWSER._loop).result(10)
+            except Exception:
+                logger.exception("Closing BrowserService")
+            logger.debug("Stopping BrowserService event loop")
+            _BROWSER._loop.stop()
+        logger.debug("BrowserService stopped")
+        _BROWSER = None
 
 
 def format_headers(headers: dict[str, str]) -> str:
