@@ -846,7 +846,7 @@ def close_browser():
         logger.debug("Closing BrowserService")
         with _BROWSER_LOCK:
             try:
-                asyncio.run_coroutine_threadsafe(_BROWSER.stagehand.reset(), _BROWSER._loop).result(10)
+                asyncio.run_coroutine_threadsafe(_BROWSER.stagehand.close(), _BROWSER._loop).result(10)
             except Exception:
                 logger.exception("Closing BrowserService")
             logger.debug("Stopping BrowserService event loop")
