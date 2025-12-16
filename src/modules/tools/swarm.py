@@ -426,7 +426,7 @@ def swarm(
             repetitive_handoff_min_unique_agents=repetitive_handoff_min_unique_agents,
         )
 
-        logger.info(f"Starting swarm execution with task: {task[:1000]}, execution_timeout=%d, node_timeout=%d, max_handoffs=%d, max_iterations=%d ...",
+        logger.info(f"Starting swarm execution with task: {task[:1000]}, execution_timeout=%d, node_timeout=%d, max_handoffs=%d, max_iterations=%d",
                     execution_timeout, node_timeout, max_handoffs, max_iterations)
 
         # Execute the swarm
@@ -439,11 +439,11 @@ def swarm(
         response_parts = []
 
         # Add execution summary
-        response_parts.append("🎯 **Custom Agent Team Execution Complete**")
-        response_parts.append(f"📊 **Status:** {result.status}")
-        response_parts.append(f"⏱️ **Execution Time:** {result.execution_time}ms")
-        response_parts.append(f"🤖 **Team Size:** {len(swarm_agents)} agents")
-        response_parts.append(f"🔄 **Iterations:** {result.execution_count}")
+        response_parts.append("**Custom Agent Team Execution Complete**")
+        response_parts.append(f"  **Status:** {result.status}")
+        response_parts.append(f"  **Execution Time:** {result.execution_time}ms")
+        response_parts.append(f"  **Team Size:** {len(swarm_agents)} agents")
+        response_parts.append(f"  **Iterations:** {result.execution_count}")
 
         if hasattr(result, "node_history") and result.node_history:
             agent_chain = " → ".join([node.node_id for node in result.node_history])
@@ -451,7 +451,7 @@ def swarm(
 
         # Add individual agent results
         if hasattr(result, "results") and result.results:
-            response_parts.append("\n**🤖 Individual Agent Contributions:**")
+            response_parts.append("\n** Individual Agent Contributions:**")
             for agent_name, node_result in result.results.items():
                 if hasattr(node_result, "result") and hasattr(node_result.result, "content"):
                     agent_content = []
@@ -477,7 +477,7 @@ def swarm(
         # Add resource usage metrics
         if hasattr(result, "accumulated_usage") and result.accumulated_usage:
             usage = result.accumulated_usage
-            response_parts.append("\n**📈 Team Resource Usage:**")
+            response_parts.append("\n** Team Resource Usage:**")
             response_parts.append(f"• Input tokens: {usage.get('inputTokens', 0):,}")
             response_parts.append(f"• Output tokens: {usage.get('outputTokens', 0):,}")
             response_parts.append(f"• Total tokens: {usage.get('totalTokens', 0):,}")

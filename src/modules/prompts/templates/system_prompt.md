@@ -106,9 +106,8 @@ Run the `tool_catalog` tool for a full list of available tools. Install missing 
 - External intel: use http_request to query NVD/CVE, Exploit‑DB, vendor advisories, Shodan/Censys, VirusTotal; save request/response artifacts and cite them in Proof Packs.
 - Commands with verbose output (sqlmap dump, nmap -A, nikto): Save full output to artifacts, extract only relevant fields for context
 - Large tool output will be truncated as indicated by
-  `[Tool output: 10,000 chars | Inline: 2,000 chars | Full: <filename>]`. Look at "<filename>" for complete analysis.
-- Documents and images will be saved to files as indicated by `[Tool output: 10,000 bytes | File: <filename>]`. Look
-  at "<filename>" for complete analysis.
+  `[Tool output: 10,000 chars | Inline: 2,000 chars | Full: <filename>]`. Use **shell** to analyze full content of "<filename>".
+- Documents and images will be saved to files as indicated by `[Tool output: 10,000 bytes | File: <filename>]`. Use **shell** to analyze full content of "<filename>".
 {{ tools_guide }}
 
 {{ environmental_context }}

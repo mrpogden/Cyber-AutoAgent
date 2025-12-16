@@ -454,6 +454,8 @@ CYBER_PROMPT_REBUILD_INTERVAL=20           # Steps between automatic optimizatio
 CYBER_ENABLE_PROMPT_OPTIMIZATION=true      # Enable/disable optimization
 CYBER_MEMORY_QUERY_LIMIT=30                # Number of recent memories to retrieve
 
+CYBER_ENABLE_PROMPT_OPTIMIZER=true         # Enable/disable automatically optimizing execution prompt based on memory patterns
+
 # Operation root directory (set automatically)
 CYBER_OPERATION_ROOT=/path/to/outputs/<target>/OP_<id>
 

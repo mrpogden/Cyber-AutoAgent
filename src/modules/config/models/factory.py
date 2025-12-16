@@ -166,7 +166,7 @@ def _resolve_prompt_token_limit(
     5. Provider defaults - Conservative last resort
 
     Args:
-        provider: Provider name ("bedrock", "ollama", "litellm")
+        provider: Provider name ("bedrock", "ollama", "litellm", "gemini")
         server_config: Server configuration object
         model_id: Model identifier
 
@@ -330,17 +330,22 @@ def _handle_model_creation_error(provider: str, error: Exception) -> None:
             "Ensure Ollama is installed: https://ollama.ai",
             "Start Ollama: ollama serve",
             "Pull required models (see config.py file)",
+            "Set OLLAMA_HOST=http://<IP>:11434",
         ],
         "bedrock": [
             "Check AWS credentials and region settings",
             "Verify AWS_ACCESS_KEY_ID or AWS_BEARER_TOKEN_BEDROCK",
             "Ensure Bedrock access is enabled in your AWS account",
         ],
+        "gemini": [
+            "Verify GEMINI_API_KEY or GOOGLE_API_KEY",
+        ],
         "litellm": [
             "Check environment variables for your model provider",
             "For Bedrock: AWS_ACCESS_KEY_ID (bearer tokens not supported)",
             "For OpenAI: OPENAI_API_KEY",
             "For Anthropic: ANTHROPIC_API_KEY",
+            "For OpenRouter: OPENROUTER_API_KEY",
         ],
     }
 
@@ -800,7 +805,7 @@ def create_gemini_model(
     clean_model_id = model_id.replace("gemini/", "")
 
     # Get API key from environment
-    api_key = config_manager.getenv("GEMINI_API_KEY")
+    api_key = config_manager.getenv("GEMINI_API_KEY") or config_manager.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError(
             "GEMINI_API_KEY environment variable must be set for native Gemini provider. "

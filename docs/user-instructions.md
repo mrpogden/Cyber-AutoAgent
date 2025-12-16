@@ -386,7 +386,8 @@ Requirements: Python 3.10+, dependencies installed
 ### Docker Standalone
 
 ```bash
-docker build -t cyber-autoagent .
+docker build -t cyber-autoagent-tools -f Dockerfile.tools ..
+docker build -t cyber-autoagent ..
 
 docker run --rm \
   -e AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \

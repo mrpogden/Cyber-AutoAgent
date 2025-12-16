@@ -8,6 +8,7 @@ import os
 
 UNDERSCORE_VERSION_PATTERN = re.compile(r'^(__version__\s*=\s*)"[^"]*"', re.MULTILINE)
 DOCKER_IMAGE_VERSION_PATTERN = re.compile(r'^(\s*image:\s+caa:)[0-9.]+$', re.MULTILINE)
+DOCKERFILE_VERSION_PATTERN = re.compile(r'(\s+org.opencontainers.image.version\s*=\s*)"[^"]*"', re.MULTILINE)
 
 root_path = pathlib.Path(os.path.dirname(os.path.realpath(__file__)), '..', '..')
 
@@ -59,7 +60,30 @@ def replace_docker_image_version(version, rel_paths: list[str]):
             continue
 
         path.write_text(new_text, encoding="utf-8")
-        print(f"{rel_path}: Updated {path} to image: caa:{version}")
+        print(f"{rel_path}: Updated image: caa:{version}")
+
+
+def replace_dockerfile_version(version, paths: list[pathlib.Path]):
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+
+        new_text, count = DOCKERFILE_VERSION_PATTERN.subn(
+            rf'\1"{version}"', text, count=1
+        )
+
+        if count == 0:
+            print(
+                f'{path}: could not find LABEL org.opencontainers.image.version = "...".',
+                file=sys.stderr,
+            )
+            continue
+
+        if new_text == text:
+            print(f"{path}: org.opencontainers.image.version is already {version}")
+            continue
+
+        path.write_text(new_text, encoding="utf-8")
+        print(f"{path}: Updated to org.opencontainers.image.version = {version}")
 
 
 def update_pyproject_version(path: pathlib.Path, version: str) -> bool:
@@ -196,6 +220,10 @@ def main() -> int:
         for file in filter(lambda f: f.endswith(".tsx"), files):
             file_path = pathlib.Path(root, file)
             update_tsx_header_version(file_path, args.version)
+        if root.endswith("/docker"):
+            for file in filter(lambda f: f.startswith("Dockerfile"), files):
+                file_path = pathlib.Path(root, file)
+                replace_dockerfile_version(args.version, [file_path])
 
     update_package_json_version(pathlib.Path(root_path, "src/modules/interfaces/react/package.json"), args.version)
 
