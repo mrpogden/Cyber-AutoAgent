@@ -164,7 +164,8 @@ def update_tsx_header_version(path: pathlib.Path, version: str) -> bool:
 
         # Leaving <Header section when another section starts
         if in_header and (stripped.endswith("/>") or stripped.endswith("})")):
-            break
+            in_header = False
+            continue
 
         if in_header and stripped.startswith("version"):
             # Handle lines like: version = "0.1.5"
@@ -175,7 +176,7 @@ def update_tsx_header_version(path: pathlib.Path, version: str) -> bool:
             current_value = value.strip()
             # Expect something like: "0.1.5"
             if current_value == f'"{version}"':
-                return False  # already up to date
+                continue  # already up to date
 
             # Preserve original spacing around '=' but replace the value
             lines[i] = f'{prefix}{sep}"{version}"'
@@ -183,10 +184,6 @@ def update_tsx_header_version(path: pathlib.Path, version: str) -> bool:
                 lines[i] += ","
             lines[i] += '\n'
             changed = True
-            break
-
-    if not in_header:
-        return False
 
     if not changed:
         return False
@@ -196,11 +193,11 @@ def update_tsx_header_version(path: pathlib.Path, version: str) -> bool:
 
 
 def update_package_json_version(package_file: pathlib.Path, version: str):
-    with open("src/modules/interfaces/react/package.json") as package_file:
-        package = json.load(package_file)
+    with open(package_file) as f:
+        package = json.load(f)
     package["version"] = version
-    with open("src/modules/interfaces/react/package.json", "w") as package_file:
-        json.dump(package, package_file, indent=2)
+    with open(package_file, "wt") as f:
+        json.dump(package, f, indent=2)
 
 
 def main() -> int:
@@ -226,6 +223,7 @@ def main() -> int:
                 replace_dockerfile_version(args.version, [file_path])
 
     update_package_json_version(pathlib.Path(root_path, "src/modules/interfaces/react/package.json"), args.version)
+    update_package_json_version(pathlib.Path(root_path, "src/modules/interfaces/react/package-lock.json"), args.version)
 
     return 0
 
