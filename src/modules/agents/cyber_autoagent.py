@@ -396,10 +396,17 @@ Available {config.module} module tools:
     if config.available_tools:
         tool_count += len(config.available_tools)
         tools_context = f"""
-### COMMAND LINE TOOLS
+### COMMAND LINE PROGRAMS
 
-Command line tools available using the **shell** tool:
+Use the **shell** tool to invoke the following command line programs in a bash shell:
 {", ".join(config.available_tools)}
+
+**Example**:
+shell(command="nmap -sV ...")
+shell(command="nuclei ...")
+
+**Program options**: Use the `--help` option to learn how to use a program:
+shell(command="nmap --help")
 """
 
     # Load MCP tools and prepare for injection
