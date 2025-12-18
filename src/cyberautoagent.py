@@ -44,6 +44,8 @@ from requests.exceptions import ReadTimeout as RequestsReadTimeout
 from strands.telemetry.config import StrandsTelemetry
 from strands.types.exceptions import MaxTokensReachedException
 
+import litellm
+
 from modules.agents.cyber_autoagent import (
     AgentConfig,
     create_agent,
@@ -676,16 +678,13 @@ def main():
             current_message = initial_prompt
 
             # SDK-aligned execution loop with continuation support
-            print_status(
-                f"Agent processing: {initial_prompt[:100]}{'...' if len(initial_prompt) > 100 else ''}",
-                "THINKING",
-            )
-
-            current_message = initial_prompt
-
-            # Continue until stop condition is met
             while not interrupted:
                 try:
+                    print_status(
+                        f"Agent processing: {current_message[:100]}{'...' if len(current_message) > 100 else ''}",
+                        "THINKING",
+                    )
+
                     _ensure_prompt_within_budget(agent)
                     # Execute agent with current message
                     result = agent(current_message)
@@ -811,6 +810,7 @@ def main():
                     BotoReadTimeoutError,
                     BotoEndpointConnectionError,
                     BotoConnectTimeoutError,
+                    litellm.RateLimitError,
                 ):
                     # Network/provider timeout: emit termination_reason and pivot to report
                     print_status(

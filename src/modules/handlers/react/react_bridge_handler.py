@@ -3371,7 +3371,7 @@ class ReactBridgeHandler(PrintingCallbackHandler):
                     self.operation_id,
                 )
 
-            eval_manager = EvaluationManager(operation_id=self.operation_id)
+            eval_manager = EvaluationManager(operation_id=self.operation_id, emitter=self.emitter)
 
             eval_manager.register_trace(
                 trace_id=self.operation_id,

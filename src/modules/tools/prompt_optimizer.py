@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -471,6 +472,14 @@ def _optimize_execution_prompt(
 
     # Save optimized prompt
     try:
+        if os.getenv("DEV", "false") == "true":
+            # backup the current prompt
+            for idx in range(1, 100):
+                backup_path = Path(optimized_path.parent, optimized_path.name + "." + str(idx))
+                if not backup_path.exists():
+                    shutil.copy(optimized_path, backup_path)
+                    break
+
         with open(optimized_path, "w", encoding="utf-8") as f:
             f.write(optimized_prompt)
         logger.info("Execution prompt optimized and saved to %s", optimized_path)
@@ -560,6 +569,30 @@ def _llm_rewrite_execution_prompt(
             region_name=config["region_name"],
             temperature=config["temperature"],
             max_tokens=8000,
+        )
+    elif provider == "gemini":
+        from strands.models.gemini import GeminiModel
+        from google.genai import types
+
+        config = config_manager.get_standard_model_config(
+            model_id, region_name, provider
+        )
+        params = {
+            "temperature": config["temperature"],
+            "max_tokens": 8000,
+        }
+        client_args: dict[str, Any] = {
+            "http_options": types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=10,
+                    exp_base=4.0,
+                )
+            )}
+
+        model = GeminiModel(
+            client_args=client_args,
+            model_id=config["model_id"],
+            params=params,
         )
     elif provider == "litellm":
         from strands.models.litellm import LiteLLMModel
