@@ -79,6 +79,19 @@
 - Large responses (HTML/JS): Save raw to <artifacts_path>/*.html, grep/sed to extract relevant data, store only file path in findings
 - Managed endpoints: Common keys (Vercel, Supabase anon, Tenderly RPC, analytics) often normal - treat as observations unless abuse/sensitive exposure demonstrated with artifacts
 
+**`channel_*` tools**
+
+- Purpose: Interact with network services by directly sending and receiving bytes.
+- When to use: Direct TCP connection is needed to control each byte send. Receiving a connection back, such as a reverse
+  shell.
+- When NOT: Protocol specific tools will work, such as http_request, ftp, smb_client.
+- Usage:
+  - The **channel_create_forward** tool creates a channel by using a command like `nc 1.2.3.4 8080` and a channel ID is
+    returned.
+  - A reverse channel opens a listening socket and returns the IP address, port and channel ID. Send the IP address and
+    port to the target.
+  - The channel ID *must* be kept for further `channel_*` tools.
+
 **stop**
 - Valid: Objective achieved with artifacts OR budget ≥95% (from REFLECTION SNAPSHOT)
 - FORBIDDEN: Intermediate success (creds/hash/vuln WITHOUT objective), approach blocked, constraints, budget <95% without trying different capability + swarm

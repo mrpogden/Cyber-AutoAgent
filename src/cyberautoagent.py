@@ -65,7 +65,7 @@ from modules.handlers.utils import (
     sanitize_target_name,
     dumpstacks,
 )
-from modules.tools import browser
+from modules.tools import browser, channel_close_all
 
 load_dotenv()
 
@@ -1041,6 +1041,7 @@ def main():
 
     finally:
         browser.close_browser()
+        channel_close_all()
 
         # Ensure log files are properly closed before exit
         def close_log_outputs():
