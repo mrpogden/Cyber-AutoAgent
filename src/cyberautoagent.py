@@ -18,6 +18,7 @@ License: MIT
 """
 
 import argparse
+import asyncio
 import atexit
 import base64
 import os
@@ -1041,7 +1042,10 @@ def main():
 
     finally:
         browser.close_browser()
-        channel_close_all()
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(channel_close_all())
+        loop.close()
 
         # Ensure log files are properly closed before exit
         def close_log_outputs():

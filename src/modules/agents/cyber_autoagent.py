@@ -795,7 +795,6 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         channel_poll,
         channel_status,
         channel_close,
-        channel_close_all,
     ]
 
     if enable_prompt_optimization:

@@ -216,9 +216,9 @@ async def channel_create_forward(
         env: Dict[str, str] = None,
 ) -> CreateForwardResult:
     """
-  ## Forward Channel Instructions
+Forward Channel Instructions
 
-  To create and use a forward channel backed by a local subprocess (stdout and stderr merged), follow this sequence of MCP tool calls:
+To create and use a forward channel backed by a local subprocess (stdout and stderr merged), follow this sequence of tool calls:
 
   1. **Create forward channel**
      - Tool: `channel_create_forward`
@@ -242,15 +242,23 @@ async def channel_create_forward(
      - Tool: `channel_close`
      - Args: `channel_id`
 
-command: Command to execute in a bash shell, shell expansion is supported.
-  Example: 'sshpass -p passw0rd ssh user@host'.
-  Usage: channel_create_forward → save channel_id → loop channel_poll for output →
-  channel_send to write stdin → channel_close when done.
+Args:
+    command: Command to execute in a bash shell, shell expansion is supported.
+      Example: 'sshpass -p passw0rd ssh user@host'.
+      Usage: channel_create_forward → save channel_id → loop channel_poll for output →
+      channel_send to write stdin → channel_close when done.
+    env: Dict of environment variables
 
-  ## Important
-  - Never output example code.
-  - Always use tool calls directly.
-  - Treat the above as a required sequence of MCP operations, not programming tasks.
+Returns:
+    Dict of the channel ID information:
+        {
+            "channel_id": "channel_2374823764",
+            "kind": "forward",
+            "created_at": 473847387.0,
+            "pid", "123"
+        }
+
+Important:
   - Commands are run on the local machine, not the target. Only use commands that will connect to the target such as ssh, nc, etc.
 """
 
@@ -289,9 +297,9 @@ async def channel_create_reverse(
         target: Optional[str] = None,
 ) -> CreateReverseResult:
     """
-  ## Channel Management Instructions
+Channel Management Instructions
 
-  To create and use a reverse channel for one duplex client, follow this sequence of MCP tool calls:
+To create and use a reverse channel for one duplex client, follow this sequence of tool calls:
 
   1. **Create reverse channel**
      - Tool: `channel_create_reverse`
@@ -320,10 +328,20 @@ async def channel_create_reverse(
      - Tool: `channel_close`
      - Args: `channel_id`
 
-  ## Important
-  - Never output example code.
-  - Always use tool calls directly.
-  - Treat the above as a required sequence of MCP operations, not programming tasks.
+Args:
+    listener_host: the IP address to listen on, defaults to "0.0.0.0" for all interfaces
+    listener_port: the port to listen on, defaults to 0 to choose an available port
+    target: the name or IP address of the target, used to select a reachable network address
+
+Returns:
+    Dict of the channel ID information:
+        {
+            "channel_id": "channel_2374823764",
+            "kind": "reverse",
+            "created_at": 473847387.0,
+        }
+
+Important:
   - It is best to leave the port set to 0 so the tool can choose a free port. The target may have networking filtering,
     in which case specifying the port of a common service like 443 may be helpful.
   - The target argument is helpful for determining which network interface to bind.
@@ -386,14 +404,31 @@ async def channel_poll(
         min_events: int = 0
 ) -> PollResult:
     """
-    Long-poll for events from a channel; events are consumed on delivery.
-    Usage:
+Long-poll for events from a channel; events are consumed on delivery.
+
+Usage:
     loop:
       r = channel_poll(channel_id, timeout=5, min_events=1)
       for e in r.events: if e.stream=='output': decode e.data_b64
+
+Args:
     timeout: Long-poll timeout (seconds). 0 = return immediately.
     max_events: Upper bound on events returned this call. 1 - 10000
     min_events: Early-return threshold. Set to 1 to wait on first event. 0 - 10000
+
+Returns:
+    Dict of events:
+    {
+        "channel_id": "echoed channel id",
+        "closed": bool,
+        "events": [
+          {
+            "ts": float,  # timestamp
+            "stream": "output|status",  # 'output' has bytes (data_b64). 'status' has a human-readable note.
+            "data_b64": "",  # "Base64 bytes for 'output' events."
+            "note": ""
+          }
+        ]
     """
 
     ch = _mgr().get(channel_id)
@@ -433,13 +468,24 @@ async def channel_send(
         append_newline: bool = False,
 ) -> SendResult:
     """
-    Write bytes to a channel's stdin (forward → subprocess, reverse → connected client).
-    Usage:
+Write bytes to a channel's stdin (forward → subprocess, reverse → connected client).
+
+Usage:
     channel_send(channel_id, mode='text', data='ls -la', append_newline=True)
     channel_send(channel_id, mode='base64', data='<b64>')
+
+Args:
+    channel_id: channel ID
     mode: 'text' = UTF-8 (optionally add newline). 'base64' = raw bytes from base64.
     data: Payload for stdin. Base64 when mode='base64'.
     append_newline: If true and mode='text', append '\n' before sending.
+
+Returns:
+    Dict of results
+    {
+        "channel_id": "echoed channel id",
+        "bytes_sent": int  # Bytes written to stdin.
+    }
     """
     ch = _mgr().get(channel_id)
     payload = base64.b64decode(data) if mode == "base64" else (
@@ -475,11 +521,22 @@ async def channel_status(
         channel_id: str
 ) -> StatusResult:
     """
-    Check whether a channel is established and ready for send/receive.
-    Usage:
+Check whether a channel is established and ready for send/receive.
+Usage:
     s = channel_status(channel_id)
     if s.connected and s.ready_for_send:
-        channel_send(channel_id, mode='text', data='ping', append_newline=True)
+    channel_send(channel_id, mode='text', data='ping', append_newline=True)
+Args:
+    channel_id: channel ID
+Returns:
+    Dict of channel status
+    {
+        "channel_id": str = Field(description="Echo channel id.")
+        "kind": "forward|reverse"],
+        "connected": bool, # Forward: True if process started and not closed., Reverse: True if a client is currently connected.
+        "ready_for_send": bool,  # True if writing to stdin should succeed now., Forward: stdin pipe open; Reverse: client connected.
+        "details": {}
+    }
     """
     ch = _mgr().get(channel_id)
 
@@ -523,18 +580,19 @@ async def channel_close(
         channel_id: str
 ) -> CloseResult:
     """
-    Close a specific channel; safe to call multiple times.
-    Usage: channel_close(channel_id)
+Close a specific channel; safe to call multiple times.
+Usage: channel_close(channel_id)
+Args:
+    channel_id: channel ID
     """
     ok = await _mgr().close(channel_id)
     return CloseResult(channel_id=channel_id, success=ok)
 
 
-@tool
 async def channel_close_all() -> Dict[str, int]:
     """
-    Close all channels in this MCP session (also happens automatically on session end).
-    Usage: channel_close_all()
+Close all channels.
+Usage: channel_close_all()
     """
     mgr = _mgr()
     count = len(getattr(mgr, "_channels", {}))
