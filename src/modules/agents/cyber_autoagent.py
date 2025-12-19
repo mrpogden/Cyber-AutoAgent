@@ -76,6 +76,15 @@ from modules.tools.browser import (
     browser_get_cookies,
 )
 from modules.tools.prompt_optimizer import prompt_optimizer
+from modules.tools.channels import (
+    channel_create_forward,
+    channel_create_reverse,
+    channel_send,
+    channel_poll,
+    channel_status,
+    channel_close,
+    channel_close_all,
+)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -780,6 +789,12 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         browser_observe_page,
         browser_evaluate_js,
         browser_get_cookies,
+        channel_create_forward,
+        channel_create_reverse,
+        channel_send,
+        channel_poll,
+        channel_status,
+        channel_close,
     ]
 
     if enable_prompt_optimization:

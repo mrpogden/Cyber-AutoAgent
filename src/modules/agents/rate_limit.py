@@ -78,7 +78,7 @@ class _TokenBucket:
                 "needed": needed,
                 "wait_total": wait_s,
                 "sleep_time": sleep_time,
-                "message": f"Sleeping for {sleep_time} seconds",
+                "message": f"Sleeping for {sleep_time:.1f} seconds",
             }
             print(f"__CYBER_EVENT__{json.dumps(rate_limit_event)}__CYBER_EVENT_END__")
             time.sleep(sleep_time)

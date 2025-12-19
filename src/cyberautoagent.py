@@ -18,6 +18,7 @@ License: MIT
 """
 
 import argparse
+import asyncio
 import atexit
 import base64
 import os
@@ -65,7 +66,7 @@ from modules.handlers.utils import (
     sanitize_target_name,
     dumpstacks,
 )
-from modules.tools import browser
+from modules.tools import browser, channel_close_all
 
 load_dotenv()
 
@@ -271,14 +272,15 @@ def main():
     """Main execution function"""
     global interrupted
 
-    # Initialize telemetry variable for use in finally block
-    telemetry = None
-
     # Set up signal handlers for Ctrl+C, Ctrl+Z, and SIGTERM (ESC in UI)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTSTP, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGUSR1, dumpstacks)
+
+    # Suppress extra debugging from LiteLLM that is printed to stderr
+    litellm.suppress_debug_info = True
+    #litellm._turn_on_debug()
 
     # Check for service mode before normal argument parsing to avoid validation issues
     is_service_mode = "--service-mode" in sys.argv
@@ -448,6 +450,10 @@ def main():
         args.region = config_manager.get_default_region()
 
     os.environ["AWS_REGION"] = args.region
+
+    if "OLLAMA_HOST" in os.environ and "OLLAMA_API_BASE" not in os.environ:
+        # Set OLLAMA_API_BASE for LiteLLM
+        os.environ["OLLAMA_API_BASE"] = os.environ["OLLAMA_HOST"]
 
     # Get configuration from ConfigManager with CLI overrides
     config_manager = get_config_manager()
@@ -1041,6 +1047,10 @@ def main():
 
     finally:
         browser.close_browser()
+
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(channel_close_all())
+        loop.close()
 
         # Ensure log files are properly closed before exit
         def close_log_outputs():

@@ -557,6 +557,9 @@ def _llm_rewrite_execution_prompt(
             model_id=config["model_id"],
             temperature=config["temperature"],
             max_tokens=8000,
+            ollama_client_args={
+                "timeout": config["timeout"],
+            },
         )
     elif provider == "bedrock":
         from strands.models.bedrock import BedrockModel
