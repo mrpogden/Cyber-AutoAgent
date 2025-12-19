@@ -280,6 +280,7 @@ def main():
 
     # Suppress extra debugging from LiteLLM that is printed to stderr
     litellm.suppress_debug_info = True
+    #litellm._turn_on_debug()
 
     # Check for service mode before normal argument parsing to avoid validation issues
     is_service_mode = "--service-mode" in sys.argv
@@ -449,6 +450,10 @@ def main():
         args.region = config_manager.get_default_region()
 
     os.environ["AWS_REGION"] = args.region
+
+    if "OLLAMA_HOST" in os.environ and "OLLAMA_API_BASE" not in os.environ:
+        # Set OLLAMA_API_BASE for LiteLLM
+        os.environ["OLLAMA_API_BASE"] = os.environ["OLLAMA_HOST"]
 
     # Get configuration from ConfigManager with CLI overrides
     config_manager = get_config_manager()
