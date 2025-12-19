@@ -272,14 +272,14 @@ def main():
     """Main execution function"""
     global interrupted
 
-    # Initialize telemetry variable for use in finally block
-    telemetry = None
-
     # Set up signal handlers for Ctrl+C, Ctrl+Z, and SIGTERM (ESC in UI)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTSTP, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGUSR1, dumpstacks)
+
+    # Suppress extra debugging from LiteLLM that is printed to stderr
+    litellm.suppress_debug_info = False
 
     # Check for service mode before normal argument parsing to avoid validation issues
     is_service_mode = "--service-mode" in sys.argv
