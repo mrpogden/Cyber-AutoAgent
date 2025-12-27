@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caa"
-version = "0.1.6"
+version = "0.2.0"
 description = "Cyber-AutoAgent: Autonomous AI agent for ethical security assessments"
 readme = "README.md"
 authors = [
@@ -62,6 +62,7 @@ dependencies = [
     "sentence-transformers>=5.1.2",
     "standard-distutils>=3.11.9",
     "guppy3~=3.1.5",
+    "validators>=0.35.0",
 ]
 
 [project.optional-dependencies]

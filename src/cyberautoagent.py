@@ -67,6 +67,7 @@ from modules.handlers.utils import (
     dumpstacks,
 )
 from modules.tools import browser, channel_close_all
+from modules.tools.oast import close_oast_providers
 
 load_dotenv()
 
@@ -682,18 +683,26 @@ def main():
         try:
             operation_start = time.time()
             current_message = initial_prompt
+            step0_retry = 2
+            # the number of consecutive action-less results
+            actionless_step_count = 0
 
             # SDK-aligned execution loop with continuation support
             while not interrupted:
                 try:
                     print_status(
-                        f"Agent processing: {current_message[:100]}{'...' if len(current_message) > 100 else ''}",
+                        f"Agent processing: {current_message[:100]}{' ...' if len(current_message) > 100 else ''}",
                         "THINKING",
                     )
+                    logger.debug(f"Agent processing: {current_message}")
+
+                    last_step = callback_handler.current_step
 
                     _ensure_prompt_within_budget(agent)
                     # Execute agent with current message
                     result = agent(current_message)
+
+                    logger.debug(f"Agent result: {repr(result)}")
 
                     # Pass the metrics from the result to the callback handler
                     if (
@@ -714,6 +723,22 @@ def main():
                                 )
                                 callback_handler.process_metrics(metrics_obj)
 
+                    # Ensure step is incremented and detect lack of progress
+                    if callback_handler and callback_handler.current_step == last_step:
+                        tool_total_count = sum(callback_handler.tool_counts.values())
+                        logger.debug("Incrementing step because agent returned but callback_handler did not, pending_step_header=%s, tool_total_count=%d, reasoning_emitted_since_last_step_header=%s",
+                                     str(callback_handler.pending_step_header),
+                                     tool_total_count,
+                                     str(getattr(callback_handler, '_reasoning_emitted_since_last_step_header', None))
+                                     )
+                        callback_handler.current_step += 1
+                        if callback_handler.pending_step_header:
+                            actionless_step_count += 1
+                        else:
+                            actionless_step_count = 0
+                    else:
+                        actionless_step_count = 0
+
                     # Check if we should continue
                     if callback_handler and callback_handler.should_stop():
                         if callback_handler.stop_tool_used:
@@ -729,7 +754,6 @@ def main():
                             print_status("Step limit reached - terminating", "SUCCESS")
                         break
 
-                    # If agent hasn't done anything substantial for a while, break to avoid infinite loop
                     # Allow at least one assistant turn to emit reasoning before concluding no action
                     if callback_handler.current_step == 0:
                         # If we've seen any reasoning emitted, give the agent one more cycle
@@ -738,9 +762,14 @@ def main():
                             logger.debug(
                                 "Initial reasoning observed with no tools yet; continuing one more cycle"
                             )
-                        else:
+                        elif step0_retry <= 0:
                             print_status("No actions taken - completing", "SUCCESS")
                             break
+                        step0_retry -= 1
+                    # If agent hasn't done anything substantial for a while, break to avoid infinite loop
+                    elif actionless_step_count > 2:
+                        print_status("No actions taken - completing", "SUCCESS")
+                        break
 
                     # Generate continuation prompt
                     remaining_steps = (
@@ -847,6 +876,7 @@ def main():
 
                 except Exception as error:
                     # Handle other termination scenarios
+                    logger.debug("Termination exception", exc_info=error)
                     error_str = str(error).lower()
                     if "maxtokensreached" in error_str or "max_tokens" in error_str:
                         # Fallback path if the specific exception type wasn't available
@@ -888,8 +918,9 @@ def main():
                     elif "step limit" in error_str:
                         print_status("Step limit reached", "SUCCESS")
                     elif (
-                            any(n in error_str for n in ["read timed out", "readtimeouterror", "network connection"])
+                            any(n in error_str for n in ["read timed out", "readtimeouterror", "network connection", "ratelimiterror"])
                     ):
+                        # TODO: combine this detection into block above that uses exception types for consistent handling
                         # Handle provider timeouts - these are now less likely with our config
                         # but if they occur, we should save progress and report it
                         logger.warning(
@@ -899,7 +930,7 @@ def main():
                         # Don't break - let finally block handle report generation
                     else:
                         print_status(f"Agent error: {str(error)}", "ERROR")
-                        logger.exception("Unexpected agent error occurred")
+                        logger.exception("Unexpected agent error occurred", exc_info=error)
                     break
 
             execution_time = time.time() - operation_start
@@ -1050,6 +1081,7 @@ def main():
 
         loop = asyncio.new_event_loop()
         loop.run_until_complete(channel_close_all())
+        loop.run_until_complete(close_oast_providers())
         loop.close()
 
         # Ensure log files are properly closed before exit
