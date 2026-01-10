@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from strands.agent.conversation_manager import (
 )
 from strands.types.content import Message
 from strands.types.exceptions import ContextWindowOverflowException
-from strands.hooks import BeforeModelCallEvent, AfterModelCallEvent  # type: ignore
+from strands.hooks import BeforeModelCallEvent, AfterModelCallEvent, HookProvider  # type: ignore
 
 from modules.config.models.dev_client import get_models_client
 
@@ -143,7 +144,7 @@ def _get_context_limit() -> int:
             return int(new_val)
         except ValueError:
             pass
-    return 200000  # Default
+    return 100000  # Default
 
 CONTEXT_LIMIT = _get_context_limit()
 # Legacy alias for backward compatibility
@@ -154,7 +155,7 @@ PROMPT_TELEMETRY_THRESHOLD = max(
 PROMPT_CACHE_RELAX = max(0.0, min(_get_env_float("CYBER_PROMPT_CACHE_RELAX", 0.1), 0.3))
 NO_REDUCTION_WARNING_RATIO = 0.8  # Warn when at 80% of limit with no reductions
 
-# Compression threshold - aligned with ToolRouterHook externalization threshold (10K)
+# Compression threshold - aligned with ToolRouterHook externalization threshold
 _TOOL_ARTIFACT_THRESHOLD = 10000
 TOOL_COMPRESS_THRESHOLD = _TOOL_ARTIFACT_THRESHOLD
 TOOL_COMPRESS_TRUNCATE = _get_env_int("CYBER_TOOL_COMPRESS_TRUNCATE", 8000)
@@ -162,7 +163,8 @@ TOOL_COMPRESS_TRUNCATE = _get_env_int("CYBER_TOOL_COMPRESS_TRUNCATE", 8000)
 # Token estimation overhead constants for content not in agent.messages
 # TODO: This could be estimated once the initial system prompt is built, then updated after prompt optimization.
 SYSTEM_PROMPT_OVERHEAD_TOKENS = 8000
-TOOL_DEFINITIONS_OVERHEAD_TOKENS = 3000
+# TODO: Calculate based on configured tools
+TOOL_DEFINITIONS_OVERHEAD_TOKENS = 15_000
 MESSAGE_METADATA_OVERHEAD_TOKENS = 50
 
 # Proactive compression threshold (percentage of window capacity)
@@ -259,6 +261,8 @@ class LargeToolResultMapper:
         self.sample_limit = sample_limit
         logger.info("Created LargeToolResultMapper with max_tool_chars=%d, truncate_at=%d, sample_limit=%d",
                     self.max_tool_chars, self.truncate_at, self.sample_limit)
+        if self.max_tool_chars < self.truncate_at:
+            logger.warning("LargeToolResultMapper expecting max_tool_chars >= truncate_at")
 
     def __call__(
         self, message: Message, index: int, messages: list[Message]
@@ -268,7 +272,7 @@ class LargeToolResultMapper:
 
         # Single pass: identify content blocks that need compression
         content_blocks = message.get("content", [])
-        indices_to_compress: list[int] = []
+        indices_to_compress: set[int] = set()
 
         for idx, content_block in enumerate(content_blocks):
             tool_result = content_block.get("toolResult")
@@ -285,7 +289,7 @@ class LargeToolResultMapper:
                         tool_length,
                         self.max_tool_chars,
                     )
-                    indices_to_compress.append(idx)
+                    indices_to_compress.add(idx)
 
             tool_use = content_block.get("toolUse")
             if tool_use:
@@ -299,7 +303,7 @@ class LargeToolResultMapper:
                         tool_use_length,
                         self.max_tool_chars,
                     )
-                    indices_to_compress.append(idx)
+                    indices_to_compress.add(idx)
 
         if not indices_to_compress:
             return message
@@ -313,36 +317,38 @@ class LargeToolResultMapper:
         # Deep copy message to prevent aliasing bugs (Strands pattern)
         # Shallow copy would share nested dicts/lists with original message
         new_message: Message = copy.deepcopy(message)
+        new_blocks = new_message.get("content", [])
         new_content: list[dict[str, Any]] = []
 
-        # Process each content block
-        for idx, content_block in enumerate(content_blocks):
+        # Process each content block (use the deep-copied blocks to avoid aliasing)
+        for idx, content_block in enumerate(new_blocks):
             if idx not in indices_to_compress:
                 # No compression needed, keep as-is
                 new_content.append(content_block)
+                continue
+
+            # Compress this content block
+            tool_result = content_block.get("toolResult")
+            tool_use = content_block.get("toolUse")
+
+            if tool_result:
+                # Shallow copy the content block, replace only toolResult
+                new_content.append(
+                    {
+                        **content_block,
+                        "toolResult": self._compress(tool_result, idx),
+                    }
+                )
+            elif tool_use:
+                # Shallow copy the content block, replace only toolUse
+                new_content.append(
+                    {
+                        **content_block,
+                        "toolUse": self._compress_tool_use(tool_use),
+                    }
+                )
             else:
-                # Compress this content block
-                tool_result = content_block.get("toolResult")
-                tool_use = content_block.get("toolUse")
-                
-                if tool_result:
-                    # Shallow copy the content block, replace only toolResult
-                    new_content.append(
-                        {
-                            **content_block,
-                            "toolResult": self._compress(tool_result, idx),
-                        }
-                    )
-                elif tool_use:
-                    # Shallow copy the content block, replace only toolUse
-                    new_content.append(
-                        {
-                            **content_block,
-                            "toolUse": self._compress_tool_use(tool_use),
-                        }
-                    )
-                else:
-                    new_content.append(content_block)
+                new_content.append(content_block)
 
         new_message["content"] = new_content
         return new_message
@@ -397,12 +403,28 @@ class LargeToolResultMapper:
             if "text" in block:
                 content_types.append("text")
                 text = block["text"]
-                # TODO: If already truncated, modify truncated messages instead of treating as original output
                 if len(text) > self.truncate_at:
-                    truncated = (
-                        text[: self.truncate_at]
-                        + f"... [truncated from {len(text)} chars]"
-                    )
+                    if " chars | Inline: " in text:
+                        # previously truncated
+                        # [Tool output: {original_size:,} chars | Inline: {len(snippet):,} chars | Full: {relative_path}]
+                        text_lines = text.splitlines()
+                        inline_count = self.truncate_at - len(text_lines[0])
+                        last_snippet_line = len(text_lines)
+                        if text_lines[-1].startswith("[Complete output saved"):
+                            inline_count -= len(text_lines[-1])
+                            last_snippet_line -= 1
+                        text_lines[0] = re.sub(r' Inline: ([0-9,.]+) chars ', f" Inline: {inline_count:,} chars ",
+                                               text_lines[0])
+                        truncated = (text_lines[0]
+                                     + "\n"
+                                     + ("\n".join(text_lines[1:last_snippet_line]))[:inline_count]
+                                     + "\n"
+                                     + "\n".join(text_lines[last_snippet_line:]))
+                    else:
+                        truncated = (
+                                text[: self.truncate_at]
+                                + f"... [truncated from {len(text)} chars]"
+                        )
                     compressed_blocks.append({"text": truncated})
                 else:
                     compressed_blocks.append(block)
@@ -415,7 +437,6 @@ class LargeToolResultMapper:
 
                 if payload_len > self.truncate_at:
                     # Create structured compression metadata
-                    # TODO: If already truncated, modify truncated messages instead of treating as original output
                     if isinstance(json_data, dict):
                         json_original_keys = len(json_data)
                         # Sample first few keys with size check (Strands pattern)
@@ -425,31 +446,32 @@ class LargeToolResultMapper:
                             for k, v in sample_items
                         }
 
-                    compressed_str = str(json_sample) if json_sample else ""
-                    # Safe division for compression ratio
-                    compression_ratio = (
-                        len(compressed_str) / payload_len
-                        if payload_len > 0
-                        else 0.0
-                    )
+                    # Build metadata in two passes so compression_ratio reflects what we actually emit.
                     metadata = CompressionMetadata(
                         compressed=True,
                         original_size=payload_len,
-                        compressed_size=len(compressed_str),
+                        compressed_size=0,
                         original_token_estimate=payload_len // 4,
-                        compressed_token_estimate=len(compressed_str) // 4,
-                        compression_ratio=compression_ratio,
+                        compressed_token_estimate=0,
+                        compression_ratio=0.0,
                         content_type="json",
-                        n_original_keys=json_original_keys
-                        if json_original_keys > 0
-                        else None,
+                        n_original_keys=json_original_keys if json_original_keys > 0 else None,
                         sample_data=json_sample if json_sample else None,
                     )
 
-                    # Add text indicator first (backward compatibility)
-                    compressed_blocks.append({"text": metadata.to_indicator_text()})
+                    # First pass indicators (ratio/size placeholders)
+                    indicator_text = metadata.to_indicator_text()
+                    indicator_json = metadata.to_indicator_json()
+                    emitted_size = len(indicator_text) + len(str(indicator_json))
+                    ratio = (emitted_size / payload_len) if payload_len > 0 else 0.0
 
-                    # Add structured JSON indicator for LLM comprehension
+                    # Update metadata with realistic emitted sizes
+                    metadata.compressed_size = emitted_size
+                    metadata.compressed_token_estimate = emitted_size // 4
+                    metadata.compression_ratio = ratio
+
+                    # Second pass indicators (now consistent)
+                    compressed_blocks.append({"text": metadata.to_indicator_text()})
                     compressed_blocks.append({"json": metadata.to_indicator_json()})
                 else:
                     compressed_blocks.append(block)
@@ -495,11 +517,10 @@ class LargeToolResultMapper:
 
         original_size = len(str(input_data))
         compressed_input = {}
-        
+
         # Compress input fields
         for key, value in input_data.items():
             value_str = str(value)
-            # TODO: If already truncated, modify truncated messages instead of treating as original output
             if len(value_str) > self.truncate_at:
                 compressed_input[key] = (
                     value_str[: self.truncate_at]
@@ -509,7 +530,7 @@ class LargeToolResultMapper:
                 compressed_input[key] = value
 
         compressed_size = len(str(compressed_input))
-        
+
         logger.info(
             "Compressed tool use input: %d → %d chars (%.1f%% reduction)",
             original_size,
@@ -646,8 +667,9 @@ class MappingConversationManager(SummarizingConversationManager):
         message_count = len(messages)
 
         if message_count >= window_size * WINDOW_OVERFLOW_THRESHOLD:
-            # Target 90% of window to leave room for new messages
-            target_count = int(window_size * 0.9)
+            # Target 90% of window to leave room for new messages, but never below preservation minimum
+            min_target = self.preserve_first + self.preserve_last + 1
+            target_count = max(1, int(window_size * 0.9), min_target)
             prune_count = max(1, message_count - target_count)  # At least 1
             logger.warning(
                 "FORCE PRUNING: Window at capacity (%d messages >= %d window). "
@@ -718,28 +740,34 @@ class MappingConversationManager(SummarizingConversationManager):
             )
 
             if has_tool_use:
-                # This is assistant message with toolUse
-                # The next message should have toolResult - remove both
-                indices_to_remove.add(idx)
-                removed_count += 1
-
-                # Check next message for toolResult
+                # This is assistant message with toolUse.
+                # Only remove it if we can also remove its paired toolResult within the prunable range.
                 next_idx = idx + 1
-                if next_idx < len(messages):
-                    next_msg = messages[next_idx]
-                    next_content = next_msg.get("content", [])
-                    next_has_result = any(
-                        isinstance(block, dict) and "toolResult" in block
-                        for block in next_content
-                        if isinstance(block, dict)
-                    )
-                    # Include toolResult even if at boundary (use <= not <)
-                    # This prevents orphaned toolUse when toolResult is at end of prunable range
-                    if next_has_result and next_idx <= end_idx:
-                        indices_to_remove.add(next_idx)
-                        removed_count += 1
-                        idx = next_idx + 1
-                        continue
+
+                # If the paired toolResult would fall outside the prunable range, skip this toolUse
+                # to avoid orphaning tool turns.
+                if next_idx >= end_idx or next_idx >= len(messages):
+                    idx += 1
+                    continue
+
+                next_msg = messages[next_idx]
+                next_content = next_msg.get("content", [])
+                next_has_result = any(
+                    isinstance(block, dict) and "toolResult" in block
+                    for block in next_content
+                    if isinstance(block, dict)
+                )
+
+                if next_has_result:
+                    indices_to_remove.add(idx)
+                    indices_to_remove.add(next_idx)
+                    removed_count += 2
+                    idx = next_idx + 1
+                    continue
+
+                # If we can't confirm a paired toolResult, don't remove the toolUse alone.
+                idx += 1
+                continue
 
             elif has_tool_result:
                 # Orphaned toolResult - should not happen but remove it safely
@@ -1041,7 +1069,7 @@ def _get_prompt_token_limit(agent: Agent) -> Optional[int]:
         logger.debug("Invalid prompt token limit on agent", exc_info=True)
     if PROMPT_TOKEN_FALLBACK_LIMIT > 0:
         setattr(agent, "_prompt_token_limit", PROMPT_TOKEN_FALLBACK_LIMIT)
-        logger.info(
+        logger.warning(
             "Prompt token limit unavailable; using fallback limit of %d tokens",
             PROMPT_TOKEN_FALLBACK_LIMIT,
         )
@@ -1563,7 +1591,7 @@ def _ensure_prompt_within_budget(agent: Agent) -> None:
             )
 
 
-class PromptBudgetHook:
+class PromptBudgetHook(HookProvider):
     """Hook provider that enforces prompt budget around model calls.
 
     Registers to production SDK events to ensure provider-agnostic behavior:
