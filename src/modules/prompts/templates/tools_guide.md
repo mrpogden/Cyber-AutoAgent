@@ -9,7 +9,8 @@
 **Core Rule**: Native tools > Command line > custom. Save all artifacts to OPERATION ARTIFACTS DIRECTORY (path injected above).
 
 **shell**
-- Usage: Non-interactive, parallel execution. Default timeout: 300s, heavy operations ≤600s
+- Usage: Non-interactive, parallel execution. Default timeout: 300s, heavy operations ≤600s.
+- The command, arguments and shell constructs must all be in a single string. An array of strings is used for running multiple commands.
 - Large outputs (>10KB expected: sqlmap --dump, nmap -A, nikto full scan):
   - Pipe to file: `sqlmap ... 2>&1 | tee <artifacts_path>/sqlmap_output.txt`
   - Extract relevant: `grep -E "password|hash|Database:" <artifacts_path>/sqlmap_output.txt`
@@ -30,7 +31,7 @@
   2. Evaluate criteria vs evidence
   3. Update: Criteria met → store_plan(current_phase+1, status='done') | Stuck → pivot/swarm | Partial → continue
 - Actions: store, store_plan, get_plan, get, list, retrieve, delete
-- Plan JSON: {"objective":"...", "current_phase":1, "total_phases":N, "phases":[...]}
+- Plan JSON: `{"objective":"...", "current_phase":1, "total_phases":N, "phases":[{"id":1, "title":"...", "status":"...", "criteria":"..."}, ...]}`
 - Categories: finding | signal | decision | artifact | observation | plan
 - Content: Paths only, no binary blobs
 
@@ -102,10 +103,10 @@
 - When to use: Software product and version have been identified with high confidence
 - NOT for: Do not run published proof-of-concepts, use for learning how to write own exploit
 
-- **sleep**
+**sleep**
 - Purpose: Wait for external processes to complete
 - When to use: An external process is running on the target, a tool reports to try again later
-- When NOT: Waiting for an oast_poll response (use timeout argument instead)
+- When NOT: Waiting for an `oast_poll` response (use timeout argument instead)
 
 **stop**
 - Valid: Objective achieved with artifacts OR budget ≥95% (from REFLECTION SNAPSHOT)

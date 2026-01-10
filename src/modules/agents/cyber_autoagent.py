@@ -13,6 +13,7 @@ from typing import Any, List, Optional, Tuple
 from strands import Agent
 from strands import tool
 from strands.types.tools import AgentTool
+from strands.hooks import HookProvider
 from strands.tools.executors import ConcurrentToolExecutor
 
 # These tools have the @tool decorator, the function is to be imported
@@ -30,6 +31,7 @@ from strands_tools import (
 )
 
 from modules import prompts, __version__
+from modules.agents.patches import ToolUseIdHook
 from modules.config import (
     AgentConfig,
     align_mem0_config,
@@ -242,7 +244,7 @@ def create_agent(
 
     # Create agent with telemetry for token tracking
     prompt_token_limit = _resolve_prompt_token_limit(
-        config.provider, server_config, config.model_id
+        config.provider, config.model_id
     )
 
     # Tool router to prevent unknown-tool failures by routing to shell before execution
@@ -270,9 +272,11 @@ def create_agent(
     else:
         logger.info("Artifact threshold %d, max tool result chars %d", artifact_threshold, max_result_chars)
 
+    # we're setting these globals because at the moment, these variables are used by other code
     global TOOL_COMPRESS_THRESHOLD, TOOL_COMPRESS_TRUNCATE
-    TOOL_COMPRESS_THRESHOLD = ceil(artifact_threshold/2)
-    TOOL_COMPRESS_TRUNCATE = ceil(max_result_chars/2)
+    # never compress output less than artifact_threshold, or we'll lose information
+    TOOL_COMPRESS_THRESHOLD = min(10000, max(ceil(artifact_threshold*1.1), ceil(max_result_chars*0.5)))
+    TOOL_COMPRESS_TRUNCATE = min(8000, max(artifact_threshold, ceil(max_result_chars*0.4)))
 
     initialize_browser(
         provider=config.provider,
@@ -286,6 +290,7 @@ def create_agent(
 
     # Get memory overview for system prompt enhancement and UI display
     memory_overview = None
+    memory_client = None
     if has_existing_memories or config.memory_path:
         try:
             memory_client = get_memory_client()
@@ -498,7 +503,7 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
     try:
         memory_client = get_memory_client(silent=True)
         if memory_client:
-            active_plan = memory_client.get_active_plan(user_id="cyber_agent")
+            active_plan = memory_client.get_active_plan(user_id="cyber_agent", operation_id=operation_id)
             if active_plan:
                 # First try to get JSON from metadata
                 plan_json = active_plan.get("metadata", {}).get("plan_json")
@@ -537,11 +542,11 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
 
                 # Fallback to text extraction if no JSON
                 if not plan_snapshot:
+                    phase_line = None
+                    criteria_line = None
                     raw = active_plan.get("memory") or active_plan.get("content", "")
                     if isinstance(raw, str) and raw:
                         # Best-effort extraction: find first active/pending phase and any criteria line
-                        phase_line = None
-                        criteria_line = None
                         for line in raw.split("\n"):
                             ls = line.strip()
                             # Look for phase lines in format: "Phase X [STATUS]: title - criteria"
@@ -749,22 +754,17 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         artifact_threshold=artifact_threshold,
     )
 
-    # Create prompt rebuild hook for intelligent prompt updates
-    from modules.handlers.prompt_rebuild_hook import PromptRebuildHook
 
     prompt_budget_hook = PromptBudgetHook(_ensure_prompt_within_budget)
-    hooks = [tool_router_hook, react_hooks, prompt_budget_hook]
-    swarm_hooks = [tool_router_hook, prompt_budget_hook]
-    agent_logger.info(
-        "HOOK REGISTRATION: Created PromptBudgetHook, will register %d hooks total",
-        len(hooks),
-    )
+    hooks: List[HookProvider] = [tool_router_hook, react_hooks, prompt_budget_hook]
+    swarm_hooks: List[HookProvider] = [tool_router_hook, prompt_budget_hook]
 
     enable_prompt_optimization = (
         os.getenv("CYBER_ENABLE_PROMPT_OPTIMIZATION", "false").lower() == "true"
     )
-
     if enable_prompt_optimization:
+        # Create prompt rebuild hook for intelligent prompt updates
+        from modules.handlers.prompt_rebuild_hook import PromptRebuildHook
         prompt_rebuild_hook = PromptRebuildHook(
             callback_handler=callback_handler,
             memory_instance=memory_client,
@@ -868,7 +868,11 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
         summary_ratio=0.3,
         preserve_recent_messages=PRESERVE_LAST_DEFAULT,  # Env default: 5 (reduced from 12)
         preserve_first_messages=PRESERVE_FIRST_DEFAULT,  # Env default: 1 (scripts often use 3)
-        tool_result_mapper=LargeToolResultMapper(max_tool_chars=ceil(artifact_threshold/2), truncate_at=ceil(max_result_chars/2)),
+        tool_result_mapper=LargeToolResultMapper(
+            # computed previously
+            max_tool_chars=TOOL_COMPRESS_THRESHOLD,
+            truncate_at=TOOL_COMPRESS_TRUNCATE
+        ),
     )
     register_conversation_manager(conversation_manager)
     agent_logger.info(
@@ -887,6 +891,16 @@ Guidance and tool names in prompts are illustrative, not prescriptive. Always ch
             trace_attributes_tool_names.append(tool.tool_name)
         except AttributeError:
             trace_attributes_tool_names.append(tool.__name__)
+
+    # Register toolUseId hook for patching toolUseId, must be last
+    tool_use_id_hook = ToolUseIdHook()
+    hooks.append(tool_use_id_hook)
+    swarm_hooks.append(tool_use_id_hook)
+
+    agent_logger.info(
+        "HOOK REGISTRATION: will register %d hooks total (%d shared with swarm agents)",
+        len(hooks), len(swarm_hooks)
+    )
 
     agent_kwargs = {
         "model": model,
